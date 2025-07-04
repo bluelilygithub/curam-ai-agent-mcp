@@ -137,6 +137,8 @@ app.post('/api/compare', async (req, res) => {
       return res.status(400).json({ error: 'Prompt is required' });
     }
 
+    console.log(`📝 Processing compare request for prompt: "${prompt.substring(0, 50)}..."`);
+
     const [flashResponse, proResponse] = await Promise.all([
       callGeminiFlash(prompt),
       callGeminiPro(prompt)
@@ -162,9 +164,6 @@ app.post('/api/compare', async (req, res) => {
     console.error('Compare error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
-
-  console.log(`🚀 Curam AI MCP Agent running on port ${PORT}`);
-  
 });
 
 // Generate Image
@@ -175,6 +174,8 @@ app.post('/api/generate-image', async (req, res) => {
     if (!prompt) {
       return res.status(400).json({ error: 'Prompt is required' });
     }
+
+    console.log(`🎨 Generating image for prompt: "${prompt.substring(0, 50)}..." with style: ${style}`);
 
     const imageResult = await generateImage(prompt, style);
     
@@ -199,6 +200,7 @@ app.post('/api/generate-image', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Curam AI MCP Agent running on port ${PORT}`);
   console.log(`📊 Health check available at /health`);
+  console.log(`🌐 API endpoints ready at https://curam-ai-agent-mcp-production.up.railway.app`);
   
   if (!process.env.GEMINI_API_KEY) {
     console.warn('⚠️  GEMINI_API_KEY not found');
