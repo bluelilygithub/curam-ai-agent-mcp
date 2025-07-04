@@ -206,4 +206,8 @@ app.listen(PORT, () => {
     console.warn('⚠️  GEMINI_API_KEY not found');
   }
   if (!process.env.STABILITY_API_KEY) {
-    conso
+    console.warn('⚠️  STABILITY_API_KEY not found');
+  }
+});
+
+export default app;
