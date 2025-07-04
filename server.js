@@ -15,7 +15,15 @@ console.log('Final PORT:', PORT);
 console.log('==================');
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://curam-ai.com.au',
+    'https://curam-ai-agent-mcp-production.up.railway.app'
+  ],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false
+}));
 app.use(express.json());
 
 // AI API Functions
