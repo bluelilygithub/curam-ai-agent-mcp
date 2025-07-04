@@ -9,6 +9,11 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+console.log('=== PORT DEBUG ===');
+console.log('process.env.PORT:', process.env.PORT);
+console.log('Final PORT:', PORT);
+console.log('==================');
+
 // Middleware
 app.use(cors());
 app.use(express.json());
