@@ -149,6 +149,9 @@ app.post('/api/compare', async (req, res) => {
     console.error('Compare error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
+
+  console.log(`🚀 Curam AI MCP Agent running on port ${PORT}`);
+  
 });
 
 // Generate Image
