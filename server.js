@@ -198,7 +198,7 @@ app.post('/api/generate-image', async (req, res) => {
   }
 });
 
-// Send Email with MailChannels
+// Send Email with MailChannels - Gmail Test Version
 app.post('/api/send-email', async (req, res) => {
   try {
     const { to, subject, message, pdf_base64 } = req.body;
@@ -211,16 +211,19 @@ app.post('/api/send-email', async (req, res) => {
 
     console.log(`📧 Sending email to: ${to} with subject: "${subject.substring(0, 30)}..."`);
 
-    // MailChannels API call
+    // MailChannels API call - Using Gmail for testing
     const emailData = {
       personalizations: [{
         to: [{ email: to }]
       }],
-      from: { email: 'mcp-demo@curamtechnology.com' },
+      from: { 
+        email: 'your-email@gmail.com',  // REPLACE WITH YOUR ACTUAL GMAIL
+        name: 'Curam AI MCP Agent'
+      },
       subject: subject,
       content: [{
-        type: 'text/plain',
-        value: message
+        type: 'text/html',
+        value: message.replace(/\n/g, '<br>')
       }]
     };
 
@@ -240,11 +243,12 @@ app.post('/api/send-email', async (req, res) => {
         headers: {
           'Authorization': `Bearer ${process.env.MAILCHANNELS_API_KEY}`,
           'Content-Type': 'application/json'
-        }
+        },
+        timeout: 10000  // 10 second timeout
       }
     );
 
-    console.log(`✅ Email sent successfully to ${to}`);
+    console.log(`✅ Email sent successfully to ${to}`, response.data);
     
     res.json({ 
       status: 'sent', 
@@ -254,10 +258,27 @@ app.post('/api/send-email', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('📧 Email sending error:', error.response?.data || error.message);
+    console.error('📧 Detailed email error:', {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+      config: error.config?.url
+    });
+    
+    // More specific error messages
+    let errorMessage = 'Email sending failed';
+    if (error.response?.status === 401) {
+      errorMessage = 'Authentication failed - check API key or domain verification';
+    } else if (error.response?.status === 403) {
+      errorMessage = 'Forbidden - domain not verified or sending limit reached';
+    } else if (error.code === 'ECONNABORTED') {
+      errorMessage = 'Request timeout - email service unavailable';
+    }
+    
     res.status(500).json({ 
-      error: 'Email sending failed',
-      details: error.response?.data?.message || error.message
+      error: errorMessage,
+      details: error.response?.data || error.message,
+      status_code: error.response?.status
     });
   }
 });
