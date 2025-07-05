@@ -196,6 +196,72 @@ app.post('/api/generate-image', async (req, res) => {
   }
 });
 
+
+// Send Email with MailChannels
+app.post('/api/send-email', async (req, res) => {
+  try {
+    const { to, subject, message, pdf_base64 } = req.body;
+    
+    if (!to || !subject || !message) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: to, subject, message' 
+      });
+    }
+
+    console.log(`📧 Sending email to: ${to} with subject: "${subject.substring(0, 30)}..."`);
+
+    // MailChannels API call
+    const emailData = {
+      personalizations: [{
+        to: [{ email: to }]
+      }],
+      from: { email: 'mcp-demo@curamtechnology.com' },
+      subject: subject,
+      content: [{
+        type: 'text/plain',
+        value: message
+      }]
+    };
+
+    // Add PDF attachment if provided
+    if (pdf_base64) {
+      emailData.attachments = [{
+        content: pdf_base64,
+        filename: 'MCP_Session_Report.pdf',
+        type: 'application/pdf'
+      }];
+    }
+
+    const response = await axios.post(
+      'https://api.mailchannels.net/tx/v1/send',
+      emailData,
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.MAILCHANNELS_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log(`✅ Email sent successfully to ${to}`);
+    
+    res.json({ 
+      status: 'sent', 
+      message: 'Email sent successfully!',
+      message_id: response.data.message_id || 'sent',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('📧 Email sending error:', error.response?.data || error.message);
+    res.status(500).json({ 
+      error: 'Email sending failed',
+      details: error.response?.data?.message || error.message
+    });
+  }
+});
+
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Curam AI MCP Agent running on port ${PORT}`);
