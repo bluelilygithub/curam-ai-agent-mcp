@@ -198,7 +198,7 @@ app.post('/api/generate-image', async (req, res) => {
   }
 });
 
-// Send Email with MailChannels - Gmail Test Version
+// Fixed Send Email with MailChannels - Correct Authentication
 app.post('/api/send-email', async (req, res) => {
   try {
     const { to, subject, message, pdf_base64 } = req.body;
@@ -211,13 +211,21 @@ app.post('/api/send-email', async (req, res) => {
 
     console.log(`📧 Sending email to: ${to} with subject: "${subject.substring(0, 30)}..."`);
 
-    // MailChannels API call - Using Gmail for testing
+    // Check if API key is present
+    if (!process.env.MAILCHANNELS_API_KEY) {
+      console.error('📧 MAILCHANNELS_API_KEY not found in environment variables');
+      return res.status(500).json({ 
+        error: 'Email service not configured - API key missing' 
+      });
+    }
+
+    // MailChannels API call - Correct format
     const emailData = {
       personalizations: [{
         to: [{ email: to }]
       }],
       from: { 
-        email: 'michaelbarrett@bluelily.com.au',  // REPLACE WITH YOUR ACTUAL GMAIL
+        email: 'michaelbarrett@bluelily.com.au',  // Your verified sender
         name: 'Curam AI MCP Agent'
       },
       subject: subject,
@@ -236,17 +244,57 @@ app.post('/api/send-email', async (req, res) => {
       }];
     }
 
+    // Debug logging (remove in production)
+    console.log('📧 API Key present:', !!process.env.MAILCHANNELS_API_KEY);
+    console.log('📧 API Key first 10 chars:', process.env.MAILCHANNELS_API_KEY?.substring(0, 10));
+
     const response = await axios.post(
       'https://api.mailchannels.net/tx/v1/send',
       emailData,
       {
         headers: {
-          'Authorization': `Bearer ${process.env.MAILCHANNELS_API_KEY}`,
+          'X-API-Key': process.env.MAILCHANNELS_API_KEY,  // Changed from Bearer to X-API-Key
           'Content-Type': 'application/json'
         },
         timeout: 10000  // 10 second timeout
       }
     );
+
+    console.log(`✅ Email sent successfully to ${to}`, response.data);
+    
+    res.json({ 
+      status: 'sent', 
+      message: 'Email sent successfully!',
+      message_id: response.data.message_id || 'sent',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('📧 Detailed email error:', {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+      config: error.config?.url,
+      headers: error.config?.headers
+    });
+    
+    // More specific error messages
+    let errorMessage = 'Email sending failed';
+    if (error.response?.status === 401) {
+      errorMessage = 'Authentication failed - check API key or domain verification';
+    } else if (error.response?.status === 403) {
+      errorMessage = 'Forbidden - domain not verified or sending limit reached';
+    } else if (error.code === 'ECONNABORTED') {
+      errorMessage = 'Request timeout - email service unavailable';
+    }
+    
+    res.status(500).json({ 
+      error: errorMessage,
+      details: error.response?.data || error.message,
+      status_code: error.response?.status
+    });
+  }
+});
 
     console.log(`✅ Email sent successfully to ${to}`, response.data);
     
