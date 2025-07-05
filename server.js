@@ -225,7 +225,7 @@ app.post('/api/send-email', async (req, res) => {
         to: [{ email: to }]
       }],
       from: { 
-        email: 'michaelbarrett@bluelily.com.au',
+        email: 'michael@curam-ai.com.au',
         name: 'Curam AI MCP Agent'
       },
       subject: subject,
