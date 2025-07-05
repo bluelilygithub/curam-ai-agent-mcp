@@ -1,4 +1,4 @@
-// server.js - MCP Agent with Gemini + Stability.AI
+// server.js - MCP Agent with Gemini + Stability.AI + Email
 import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
@@ -100,7 +100,7 @@ app.get('/', (req, res) => {
   res.json({
     name: 'Curam AI MCP Agent',
     version: '1.0.0',
-    description: 'MCP agent with Gemini models and Stability.AI',
+    description: 'MCP agent with Gemini models, Stability.AI, and Email',
     models: {
       text: ['Gemini 1.5 Flash', 'Gemini 1.5 Pro'],
       image: ['Stable Diffusion XL']
@@ -110,6 +110,7 @@ app.get('/', (req, res) => {
       compare: 'POST /api/compare',
       analyze: 'POST /api/analyze',
       generate_image: 'POST /api/generate-image',
+      send_email: 'POST /api/send-email',
       multimodal: 'POST /api/multimodal'
     },
     status: 'running'
@@ -123,7 +124,8 @@ app.get('/health', (req, res) => {
     uptime: process.uptime(),
     models: {
       gemini: !!process.env.GEMINI_API_KEY,
-      stability: !!process.env.STABILITY_API_KEY
+      stability: !!process.env.STABILITY_API_KEY,
+      mailchannels: !!process.env.MAILCHANNELS_API_KEY
     }
   });
 });
@@ -196,7 +198,6 @@ app.post('/api/generate-image', async (req, res) => {
   }
 });
 
-
 // Send Email with MailChannels
 app.post('/api/send-email', async (req, res) => {
   try {
@@ -261,7 +262,6 @@ app.post('/api/send-email', async (req, res) => {
   }
 });
 
-
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Curam AI MCP Agent running on port ${PORT}`);
@@ -273,6 +273,9 @@ app.listen(PORT, () => {
   }
   if (!process.env.STABILITY_API_KEY) {
     console.warn('⚠️  STABILITY_API_KEY not found');
+  }
+  if (!process.env.MAILCHANNELS_API_KEY) {
+    console.warn('⚠️  MAILCHANNELS_API_KEY not found');
   }
 });
 
