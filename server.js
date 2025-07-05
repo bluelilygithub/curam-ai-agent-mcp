@@ -217,7 +217,7 @@ app.post('/api/send-email', async (req, res) => {
         to: [{ email: to }]
       }],
       from: { 
-        email: 'your-email@gmail.com',  // REPLACE WITH YOUR ACTUAL GMAIL
+        email: 'michaelbarrett@bluelily.com.au',  // REPLACE WITH YOUR ACTUAL GMAIL
         name: 'Curam AI MCP Agent'
       },
       subject: subject,
