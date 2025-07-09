@@ -63,6 +63,41 @@ async function callGeminiPro(prompt) {
   }
 }
 
+// NEW: Hugging Face API Function
+async function callHuggingFaceModel(prompt, modelId) {
+  try {
+    const response = await axios.post(
+      `https://api-inference.huggingface.co/models/${modelId}`,
+      {
+        inputs: prompt,
+        parameters: {
+          max_length: 100,
+          temperature: 0.7,
+          do_sample: true
+        }
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.HUGGING_FACE_API_KEY}`
+        }
+      }
+    );
+    
+    // Handle different response formats from Hugging Face
+    if (Array.isArray(response.data) && response.data[0]?.generated_text) {
+      return response.data[0].generated_text;
+    } else if (typeof response.data === 'string') {
+      return response.data;
+    } else {
+      return JSON.stringify(response.data);
+    }
+  } catch (error) {
+    console.error(`Hugging Face ${modelId} Error:`, error.response?.data || error.message);
+    return `Hugging Face ${modelId} Error: ${error.response?.data?.error || error.message}`;
+  }
+}
+
 async function generateImage(prompt, style = 'photographic') {
   try {
     const response = await axios.post(
@@ -125,6 +160,7 @@ app.get('/health', (req, res) => {
     models: {
       gemini: !!process.env.GEMINI_API_KEY,
       stability: !!process.env.STABILITY_API_KEY,
+      hugging_face: !!process.env.HUGGING_FACE_API_KEY,
       mailchannels: !!process.env.MAILCHANNELS_API_KEY
     }
   });
@@ -164,6 +200,36 @@ app.post('/api/compare', async (req, res) => {
     });
   } catch (error) {
     console.error('Compare error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// NEW: Simple Hugging Face Endpoint
+app.post('/api/hugging-face', async (req, res) => {
+  try {
+    const { prompt, model_id = 'gpt2' } = req.body;
+    
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    if (!process.env.HUGGING_FACE_API_KEY) {
+      return res.status(500).json({ error: 'Hugging Face API key not configured' });
+    }
+
+    console.log(`🤗 Processing Hugging Face request for model: ${model_id}`);
+
+    const response = await callHuggingFaceModel(prompt, model_id);
+    
+    res.json({
+      prompt,
+      model_id,
+      response,
+      provider: 'Hugging Face',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Hugging Face error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -306,6 +372,9 @@ app.listen(PORT, () => {
   }
   if (!process.env.STABILITY_API_KEY) {
     console.warn('⚠️  STABILITY_API_KEY not found');
+  }
+  if (!process.env.HUGGING_FACE_API_KEY) {
+    console.warn('⚠️  HUGGING_FACE_API_KEY not found - Hugging Face features disabled');
   }
   if (!process.env.MAILCHANNELS_API_KEY) {
     console.warn('⚠️  MAILCHANNELS_API_KEY not found');
