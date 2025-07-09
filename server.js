@@ -201,15 +201,14 @@ async function generateImage(prompt, style = 'photographic') {
     }
 
     const response = await axios.post(
-      'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image',
+      'https://api.stability.ai/v1/generation/stable-diffusion-v1-6/text-to-image',
       {
         text_prompts: [{ text: prompt, weight: 1 }],
         cfg_scale: 7,
         height: 1024,
         width: 1024,
         samples: 1,
-        steps: 30,
-        style_preset: style
+        steps: 30
       },
       {
         headers: {
@@ -285,6 +284,115 @@ app.get('/health', (req, res) => {
       mailchannels: !!process.env.MAILCHANNELS_API_KEY
     }
   });
+});
+
+// NEW: Test Stability AI API key
+app.get('/api/test-stability', async (req, res) => {
+  try {
+    if (!process.env.STABILITY_API_KEY) {
+      return res.status(500).json({ 
+        error: 'STABILITY_API_KEY not configured',
+        status: 'missing'
+      });
+    }
+
+    console.log('🔑 Testing Stability AI API key...');
+    
+    // Test with a simple request
+    const response = await axios.get(
+      'https://api.stability.ai/v1/user/balance',
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`,
+          'Accept': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+
+    console.log('✅ Stability AI API key is valid');
+    
+    res.json({
+      status: 'valid',
+      balance: response.data,
+      message: 'Stability AI API key is working correctly'
+    });
+  } catch (error) {
+    console.error('❌ Stability AI API key test failed:', {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data
+    });
+    
+    res.status(500).json({
+      status: 'invalid',
+      error: 'Stability AI API key test failed',
+      details: error.response?.data || error.message,
+      status_code: error.response?.status
+    });
+  }
+});
+
+// NEW: Quick image generation test
+app.post('/api/test-image-generation', async (req, res) => {
+  try {
+    const { prompt = 'a simple red circle' } = req.body;
+    
+    if (!process.env.STABILITY_API_KEY) {
+      return res.status(500).json({ 
+        error: 'STABILITY_API_KEY not configured',
+        status: 'missing'
+      });
+    }
+
+    console.log('🎨 Testing image generation with simple prompt...');
+    
+    // Use a simpler model and shorter timeout for testing
+    const response = await axios.post(
+      'https://api.stability.ai/v1/generation/stable-diffusion-v1-6/text-to-image',
+      {
+        text_prompts: [{ text: prompt, weight: 1 }],
+        cfg_scale: 7,
+        height: 512,
+        width: 512,
+        samples: 1,
+        steps: 20
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`,
+          'Accept': 'application/json'
+        },
+        timeout: 60000 // 1 minute timeout for testing
+      }
+    );
+
+    console.log('✅ Test image generation successful');
+    
+    res.json({
+      status: 'success',
+      prompt,
+      image_base64: response.data.artifacts[0].base64,
+      seed: response.data.artifacts[0].seed,
+      message: 'Test image generation completed successfully'
+    });
+  } catch (error) {
+    console.error('❌ Test image generation failed:', {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+      code: error.code
+    });
+    
+    res.status(500).json({
+      status: 'failed',
+      error: 'Test image generation failed',
+      details: error.response?.data || error.message,
+      status_code: error.response?.status,
+      code: error.code
+    });
+  }
 });
 
 // Compare Gemini Models
