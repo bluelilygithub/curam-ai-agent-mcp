@@ -194,6 +194,12 @@ async function selectOptimalModel(taskAnalysis) {
 
 async function generateImage(prompt, style = 'photographic') {
   try {
+    console.log(`🎨 Starting image generation for: "${prompt.substring(0, 50)}..."`);
+    
+    if (!process.env.STABILITY_API_KEY) {
+      throw new Error('STABILITY_API_KEY not configured');
+    }
+
     const response = await axios.post(
       'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image',
       {
@@ -210,17 +216,36 @@ async function generateImage(prompt, style = 'photographic') {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`,
           'Accept': 'application/json'
-        }
+        },
+        timeout: 120000 // 2 minutes timeout
       }
     );
+    
+    console.log(`✅ Image generated successfully with seed: ${response.data.artifacts[0].seed}`);
     
     return {
       image: response.data.artifacts[0].base64,
       seed: response.data.artifacts[0].seed
     };
   } catch (error) {
-    console.error('Stability Error:', error.response?.data || error.message);
-    return `Stability Error: ${error.response?.data?.message || error.message}`;
+    console.error('🎨 Stability AI Error Details:', {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+      code: error.code
+    });
+    
+    if (error.code === 'ECONNABORTED') {
+      return `Stability Error: Request timeout after 2 minutes. Image generation may be taking longer than expected.`;
+    } else if (error.response?.status === 401) {
+      return `Stability Error: Authentication failed. Please check your STABILITY_API_KEY.`;
+    } else if (error.response?.status === 429) {
+      return `Stability Error: Rate limit exceeded. Please wait a moment before trying again.`;
+    } else if (error.response?.status === 500) {
+      return `Stability Error: Server error. The image generation service is temporarily unavailable.`;
+    } else {
+      return `Stability Error: ${error.response?.data?.message || error.message}`;
+    }
   }
 }
 
@@ -513,11 +538,24 @@ app.post('/api/generate-image', async (req, res) => {
 
     console.log(`🎨 Generating image for prompt: "${prompt.substring(0, 50)}..." with style: ${style}`);
 
+    // Check if Stability API key is configured
+    if (!process.env.STABILITY_API_KEY) {
+      return res.status(500).json({ 
+        error: 'Image generation not configured - STABILITY_API_KEY missing',
+        details: 'Please add your Stability AI API key to the environment variables'
+      });
+    }
+
     const imageResult = await generateImage(prompt, style);
     
     if (typeof imageResult === 'string') {
-      return res.status(500).json({ error: imageResult });
+      return res.status(500).json({ 
+        error: imageResult,
+        details: 'Image generation failed. Check the error message above for details.'
+      });
     }
+    
+    console.log(`✅ Image generation completed successfully`);
     
     res.json({
       prompt,
@@ -527,8 +565,11 @@ app.post('/api/generate-image', async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    console.error('Image generation error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('🎨 Image generation endpoint error:', error);
+    res.status(500).json({ 
+      error: 'Internal server error during image generation',
+      details: error.message
+    });
   }
 });
 
