@@ -125,7 +125,8 @@ app.get('/health', (req, res) => {
     models: {
       gemini: !!process.env.GEMINI_API_KEY,
       stability: !!process.env.STABILITY_API_KEY,
-      mailchannels: !!process.env.MAILCHANNELS_API_KEY
+      mailchannels: !!process.env.MAILCHANNELS_API_KEY,
+      huggingface: !!process.env.HUGGING_FACE_API_KEY
     }
   });
 });
@@ -309,6 +310,9 @@ app.listen(PORT, () => {
   }
   if (!process.env.MAILCHANNELS_API_KEY) {
     console.warn('⚠️  MAILCHANNELS_API_KEY not found');
+  }
+  if (!process.env.HUGGING_FACE_API_KEY) {
+    console.warn('⚠️  HUGGING_FACE_API_KEY not found');
   }
 });
 
