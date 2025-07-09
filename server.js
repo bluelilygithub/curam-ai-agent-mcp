@@ -195,20 +195,23 @@ async function selectOptimalModel(taskAnalysis) {
 async function generateImage(prompt, style = 'photographic') {
   try {
     console.log(`🎨 Starting image generation for: "${prompt.substring(0, 50)}..."`);
+    console.log(`🎨 Using Stability AI API key: ${process.env.STABILITY_API_KEY ? 'Present' : 'Missing'}`);
     
     if (!process.env.STABILITY_API_KEY) {
       throw new Error('STABILITY_API_KEY not configured');
     }
 
+    // Use the original working Stability AI endpoint
     const response = await axios.post(
-      'https://api.stability.ai/v1/generation/stable-diffusion-v1-6/text-to-image',
+      'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image',
       {
         text_prompts: [{ text: prompt, weight: 1 }],
         cfg_scale: 7,
-        height: 1024,
-        width: 1024,
+        height: 600,
+        width: 600,
         samples: 1,
-        steps: 30
+        steps: 30,
+        style_preset: style
       },
       {
         headers: {
@@ -231,13 +234,16 @@ async function generateImage(prompt, style = 'photographic') {
       message: error.message,
       status: error.response?.status,
       data: error.response?.data,
-      code: error.code
+      code: error.code,
+      url: error.config?.url
     });
     
     if (error.code === 'ECONNABORTED') {
       return `Stability Error: Request timeout after 2 minutes. Image generation may be taking longer than expected.`;
     } else if (error.response?.status === 401) {
       return `Stability Error: Authentication failed. Please check your STABILITY_API_KEY.`;
+    } else if (error.response?.status === 404) {
+      return `Stability Error: Model endpoint not found. The API endpoint may have changed.`;
     } else if (error.response?.status === 429) {
       return `Stability Error: Rate limit exceeded. Please wait a moment before trying again.`;
     } else if (error.response?.status === 500) {
@@ -347,9 +353,9 @@ app.post('/api/test-image-generation', async (req, res) => {
 
     console.log('🎨 Testing image generation with simple prompt...');
     
-    // Use a simpler model and shorter timeout for testing
+    // Use the most reliable Stability AI model for testing
     const response = await axios.post(
-      'https://api.stability.ai/v1/generation/stable-diffusion-v1-6/text-to-image',
+      'https://api.stability.ai/v1/generation/stable-diffusion-v1-5/text-to-image',
       {
         text_prompts: [{ text: prompt, weight: 1 }],
         cfg_scale: 7,
