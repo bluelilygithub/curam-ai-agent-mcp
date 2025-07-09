@@ -1,4 +1,4 @@
-// server.js - MCP Agent with Gemini + Stability.AI + Email
+// server.js - MCP Agent with Gemini + Stability.AI + Hugging Face + Email
 import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
@@ -95,21 +95,96 @@ async function generateImage(prompt, style = 'photographic') {
   }
 }
 
+// Hugging Face API Functions
+async function callHuggingFaceModel(model, inputs, parameters = {}) {
+  try {
+    const response = await axios.post(
+      `https://api-inference.huggingface.co/models/${model}`,
+      {
+        inputs: inputs,
+        parameters: parameters
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.HUGGING_FACE_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error('Hugging Face Error:', error.response?.data || error.message);
+    return `Hugging Face Error: ${error.response?.data?.error || error.message}`;
+  }
+}
+
+async function generateHuggingFaceImage(prompt, model = 'black-forest-labs/FLUX.1-dev') {
+  try {
+    const response = await axios.post(
+      `https://api-inference.huggingface.co/models/${model}`,
+      {
+        inputs: prompt
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.HUGGING_FACE_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        responseType: 'arraybuffer'
+      }
+    );
+    
+    // Convert to base64
+    const base64Image = Buffer.from(response.data).toString('base64');
+    return {
+      image: base64Image,
+      model: model
+    };
+  } catch (error) {
+    console.error('Hugging Face Image Error:', error.response?.data || error.message);
+    return `Hugging Face Image Error: ${error.response?.data?.error || error.message}`;
+  }
+}
+
+async function analyzeImageWithHuggingFace(imageBase64, model = 'microsoft/DiT-3B') {
+  try {
+    const response = await axios.post(
+      `https://api-inference.huggingface.co/models/${model}`,
+      {
+        inputs: imageBase64
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.HUGGING_FACE_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error('Hugging Face Image Analysis Error:', error.response?.data || error.message);
+    return `Hugging Face Image Analysis Error: ${error.response?.data?.error || error.message}`;
+  }
+}
+
 // Routes
 app.get('/', (req, res) => {
   res.json({
     name: 'Curam AI MCP Agent',
-    version: '1.0.0',
-    description: 'MCP agent with Gemini models, Stability.AI, and Email',
+    version: '1.1.0',
+    description: 'MCP agent with Gemini models, Stability.AI, Hugging Face, and Email',
     models: {
-      text: ['Gemini 1.5 Flash', 'Gemini 1.5 Pro'],
-      image: ['Stable Diffusion XL']
+      text: ['Gemini 1.5 Flash', 'Gemini 1.5 Pro', 'Hugging Face Models'],
+      image: ['Stable Diffusion XL', 'FLUX.1', 'Various Hugging Face Models']
     },
     endpoints: {
       health: '/health',
       compare: 'POST /api/compare',
       analyze: 'POST /api/analyze',
       generate_image: 'POST /api/generate-image',
+      huggingface_text: 'POST /api/huggingface/text',
+      huggingface_image: 'POST /api/huggingface/image',
+      huggingface_analyze: 'POST /api/huggingface/analyze',
       send_email: 'POST /api/send-email',
       multimodal: 'POST /api/multimodal'
     },
@@ -125,6 +200,7 @@ app.get('/health', (req, res) => {
     models: {
       gemini: !!process.env.GEMINI_API_KEY,
       stability: !!process.env.STABILITY_API_KEY,
+      huggingface: !!process.env.HUGGING_FACE_API_KEY,
       mailchannels: !!process.env.MAILCHANNELS_API_KEY
     }
   });
@@ -194,6 +270,108 @@ app.post('/api/generate-image', async (req, res) => {
     });
   } catch (error) {
     console.error('Image generation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Hugging Face Text Generation
+app.post('/api/huggingface/text', async (req, res) => {
+  try {
+    const { 
+      prompt, 
+      model = 'microsoft/DialoGPT-medium', 
+      max_length = 100,
+      temperature = 0.7,
+      top_p = 0.9
+    } = req.body;
+    
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    console.log(`🤗 Calling Hugging Face text model: ${model} with prompt: "${prompt.substring(0, 50)}..."`);
+
+    const result = await callHuggingFaceModel(model, prompt, {
+      max_length,
+      temperature,
+      top_p
+    });
+    
+    if (typeof result === 'string') {
+      return res.status(500).json({ error: result });
+    }
+    
+    res.json({
+      prompt,
+      model,
+      response: result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Hugging Face text error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Hugging Face Image Generation
+app.post('/api/huggingface/image', async (req, res) => {
+  try {
+    const { 
+      prompt, 
+      model = 'black-forest-labs/FLUX.1-dev'
+    } = req.body;
+    
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    console.log(`🤗🎨 Generating image with Hugging Face model: ${model} for prompt: "${prompt.substring(0, 50)}..."`);
+
+    const imageResult = await generateHuggingFaceImage(prompt, model);
+    
+    if (typeof imageResult === 'string') {
+      return res.status(500).json({ error: imageResult });
+    }
+    
+    res.json({
+      prompt,
+      model,
+      image_base64: imageResult.image,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Hugging Face image generation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Hugging Face Image Analysis
+app.post('/api/huggingface/analyze', async (req, res) => {
+  try {
+    const { 
+      image_base64, 
+      model = 'microsoft/DiT-3B'
+    } = req.body;
+    
+    if (!image_base64) {
+      return res.status(400).json({ error: 'Base64 image is required' });
+    }
+
+    console.log(`🤗🔍 Analyzing image with Hugging Face model: ${model}`);
+
+    const analysisResult = await analyzeImageWithHuggingFace(image_base64, model);
+    
+    if (typeof analysisResult === 'string') {
+      return res.status(500).json({ error: analysisResult });
+    }
+    
+    res.json({
+      model,
+      analysis: analysisResult,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Hugging Face image analysis error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -306,6 +484,9 @@ app.listen(PORT, () => {
   }
   if (!process.env.STABILITY_API_KEY) {
     console.warn('⚠️  STABILITY_API_KEY not found');
+  }
+  if (!process.env.HUGGING_FACE_API_KEY) {
+    console.warn('⚠️  HUGGING_FACE_API_KEY not found');
   }
   if (!process.env.MAILCHANNELS_API_KEY) {
     console.warn('⚠️  MAILCHANNELS_API_KEY not found');
