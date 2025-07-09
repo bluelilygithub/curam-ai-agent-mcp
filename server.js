@@ -1,4 +1,4 @@
-// server.js - MCP Agent with Gemini + Stability.AI + Email
+// server.js - MCP Agent with Gemini + Stability.AI + Email + Enhanced Hugging Face
 import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
@@ -39,6 +39,35 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 
+// Reliable models for free tier
+const RELIABLE_FREE_MODELS = {
+  'text-generation': [
+    'gpt2',
+    'microsoft/DialoGPT-medium',
+    'EleutherAI/gpt-neo-1.3B'
+  ],
+  'text-classification': [
+    'distilbert-base-uncased-finetuned-sst-2-english',
+    'cardiffnlp/twitter-roberta-base-sentiment-latest'
+  ],
+  'question-answering': [
+    'distilbert-base-cased-distilled-squad',
+    'deepset/roberta-base-squad2'
+  ],
+  'fill-mask': [
+    'bert-base-uncased',
+    'distilbert-base-uncased'
+  ],
+  'summarization': [
+    'facebook/bart-large-cnn',
+    'sshleifer/distilbart-cnn-12-6'
+  ],
+  'translation': [
+    'Helsinki-NLP/opus-mt-en-fr',
+    'Helsinki-NLP/opus-mt-en-de'
+  ]
+};
+
 // AI API Functions
 async function callGeminiFlash(prompt) {
   try {
@@ -74,6 +103,150 @@ async function callGeminiPro(prompt) {
     console.error('Gemini Pro Error:', error.response?.data || error.message);
     return `Gemini Pro Error: ${error.response?.data?.error?.message || error.message}`;
   }
+}
+
+// Enhanced Hugging Face API call with retry logic
+async function callHuggingFaceModel(prompt, modelId, task = 'text-generation', retries = 3) {
+  const maxRetries = retries;
+  let lastError;
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      console.log(`🤗 Attempt ${i + 1}/${maxRetries} for model: ${modelId}`);
+
+      // Format request based on task type
+      const requestData = formatHuggingFaceRequest(prompt, modelId, task);
+      
+      const response = await axios.post(
+        `https://api-inference.huggingface.co/models/${modelId}`,
+        requestData,
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.HUGGING_FACE_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 60000
+        }
+      );
+
+      // Check if model is still loading
+      if (response.data.error && response.data.error.includes('loading')) {
+        console.log(`🤗 Model ${modelId} loading, waiting...`);
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        continue;
+      }
+
+      // Check for rate limit
+      if (response.data.error && response.data.error.includes('rate')) {
+        console.log(`🤗 Rate limited, waiting...`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        continue;
+      }
+
+      return {
+        success: true,
+        model: modelId,
+        response: parseHuggingFaceResponse(response.data, task),
+        raw_response: response.data
+      };
+
+    } catch (error) {
+      lastError = error;
+      
+      if (error.response?.status === 503) {
+        console.log(`🤗 Service unavailable for ${modelId}, retry ${i + 1}/${maxRetries}`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        continue;
+      }
+      
+      if (error.response?.status === 429) {
+        console.log(`🤗 Rate limited for ${modelId}, retry ${i + 1}/${maxRetries}`);
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        continue;
+      }
+      
+      // For other errors, break immediately
+      break;
+    }
+  }
+
+  return {
+    success: false,
+    model: modelId,
+    error: lastError?.response?.data || lastError?.message || 'Unknown error'
+  };
+}
+
+// Format request based on model type
+function formatHuggingFaceRequest(prompt, modelId, task) {
+  const basePayload = { inputs: prompt };
+  
+  switch (task) {
+    case 'text-generation':
+      return {
+        ...basePayload,
+        parameters: {
+          max_length: 150,
+          temperature: 0.7,
+          do_sample: true,
+          return_full_text: false,
+          top_p: 0.9,
+          num_return_sequences: 1
+        }
+      };
+    
+    case 'summarization':
+      return {
+        ...basePayload,
+        parameters: {
+          max_length: 100,
+          min_length: 30,
+          do_sample: false
+        }
+      };
+    
+    case 'question-answering':
+      // For QA, prompt should be formatted as {"question": "...", "context": "..."}
+      if (typeof prompt === 'string') {
+        return {
+          inputs: {
+            question: prompt,
+            context: "This is a general knowledge question that needs to be answered based on available information."
+          }
+        };
+      }
+      return basePayload;
+    
+    default:
+      return basePayload;
+  }
+}
+
+// Parse response based on task type
+function parseHuggingFaceResponse(data, task) {
+  if (Array.isArray(data)) {
+    switch (task) {
+      case 'text-generation':
+        return data[0]?.generated_text || data[0]?.text || JSON.stringify(data[0]);
+      
+      case 'text-classification':
+        return data[0]?.label || JSON.stringify(data[0]);
+      
+      case 'question-answering':
+        return data[0]?.answer || JSON.stringify(data[0]);
+      
+      case 'summarization':
+        return data[0]?.summary_text || JSON.stringify(data[0]);
+      
+      case 'fill-mask':
+        return data.map(item => `${item.token_str} (${(item.score * 100).toFixed(1)}%)`).join(', ');
+      
+      default:
+        return JSON.stringify(data[0]);
+    }
+  }
+  
+  return JSON.stringify(data);
 }
 
 async function generateImage(prompt, style = 'photographic') {
@@ -113,10 +286,11 @@ app.get('/', (req, res) => {
   res.json({
     name: 'Curam AI MCP Agent',
     version: '1.0.0',
-    description: 'MCP agent with Gemini models, Stability.AI, and Email',
+    description: 'MCP agent with Gemini models, Stability.AI, Email, and Enhanced Hugging Face',
     models: {
       text: ['Gemini 1.5 Flash', 'Gemini 1.5 Pro'],
-      image: ['Stable Diffusion XL']
+      image: ['Stable Diffusion XL'],
+      huggingface: Object.keys(RELIABLE_FREE_MODELS)
     },
     endpoints: {
       health: '/health',
@@ -124,7 +298,10 @@ app.get('/', (req, res) => {
       analyze: 'POST /api/analyze',
       generate_image: 'POST /api/generate-image',
       send_email: 'POST /api/send-email',
-      multimodal: 'POST /api/multimodal'
+      multimodal: 'POST /api/multimodal',
+      hugging_face_test: 'POST /api/hugging-face-test',
+      hugging_face_multi: 'POST /api/hugging-face-multi',
+      hugging_face_models: 'GET /api/hugging-face-models'
     },
     status: 'running'
   });
@@ -140,6 +317,18 @@ app.get('/health', (req, res) => {
       stability: !!process.env.STABILITY_API_KEY,
       mailchannels: !!process.env.MAILCHANNELS_API_KEY,
       huggingface: !!process.env.HUGGING_FACE_API_KEY
+    }
+  });
+});
+
+// Get available Hugging Face models
+app.get('/api/hugging-face-models', (req, res) => {
+  res.json({
+    available_tasks: Object.keys(RELIABLE_FREE_MODELS),
+    models: RELIABLE_FREE_MODELS,
+    usage: {
+      single_model: 'POST /api/hugging-face-test',
+      multiple_models: 'POST /api/hugging-face-multi'
     }
   });
 });
@@ -212,7 +401,7 @@ app.post('/api/generate-image', async (req, res) => {
   }
 });
 
-// Send Email with MailChannels - Fixed Authentication
+// Send Email with MailChannels
 app.post('/api/send-email', async (req, res) => {
   try {
     const { to, subject, message, pdf_base64 } = req.body;
@@ -225,7 +414,6 @@ app.post('/api/send-email', async (req, res) => {
 
     console.log(`📧 Sending email to: ${to} with subject: "${subject.substring(0, 30)}..."`);
 
-    // Check if API key is present
     if (!process.env.MAILCHANNELS_API_KEY) {
       console.error('📧 MAILCHANNELS_API_KEY not found in environment variables');
       return res.status(500).json({ 
@@ -233,7 +421,6 @@ app.post('/api/send-email', async (req, res) => {
       });
     }
 
-    // MailChannels API call - Correct format
     const emailData = {
       personalizations: [{
         to: [{ email: to }]
@@ -249,7 +436,6 @@ app.post('/api/send-email', async (req, res) => {
       }]
     };
 
-    // Add PDF attachment if provided
     if (pdf_base64) {
       emailData.attachments = [{
         content: pdf_base64,
@@ -257,10 +443,6 @@ app.post('/api/send-email', async (req, res) => {
         type: 'application/pdf'
       }];
     }
-
-    // Debug logging
-    console.log('📧 API Key present:', !!process.env.MAILCHANNELS_API_KEY);
-    console.log('📧 API Key first 10 chars:', process.env.MAILCHANNELS_API_KEY?.substring(0, 10));
 
     const response = await axios.post(
       'https://api.mailchannels.net/tx/v1/send',
@@ -274,7 +456,7 @@ app.post('/api/send-email', async (req, res) => {
       }
     );
 
-    console.log(`✅ Email sent successfully to ${to}`, response.data);
+    console.log(`✅ Email sent successfully to ${to}`);
     
     res.json({ 
       status: 'sent', 
@@ -284,14 +466,8 @@ app.post('/api/send-email', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('📧 Detailed email error:', {
-      message: error.message,
-      status: error.response?.status,
-      data: error.response?.data,
-      config: error.config?.url
-    });
+    console.error('📧 Email error:', error.response?.data || error.message);
     
-    // More specific error messages
     let errorMessage = 'Email sending failed';
     if (error.response?.status === 401) {
       errorMessage = 'Authentication failed - check API key or domain verification';
@@ -305,6 +481,132 @@ app.post('/api/send-email', async (req, res) => {
       error: errorMessage,
       details: error.response?.data || error.message,
       status_code: error.response?.status
+    });
+  }
+});
+
+// Enhanced Hugging Face single model test
+app.post('/api/hugging-face-test', async (req, res) => {
+  try {
+    const { prompt, model, task = 'text-generation' } = req.body;
+
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    if (!process.env.HUGGING_FACE_API_KEY) {
+      return res.status(500).json({ error: 'Hugging Face API key not configured' });
+    }
+
+    // Use provided model or default to reliable one
+    let modelId = model;
+    if (!modelId && RELIABLE_FREE_MODELS[task]) {
+      modelId = RELIABLE_FREE_MODELS[task][0];
+    } else if (!modelId) {
+      modelId = 'gpt2';
+    }
+
+    console.log(`🤗 Testing single model: ${modelId} with task: ${task}`);
+
+    const result = await callHuggingFaceModel(prompt, modelId, task);
+    
+    if (result.success) {
+      res.json({
+        ...result,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      res.status(500).json({
+        error: 'Hugging Face API call failed',
+        details: result.error,
+        model: result.model
+      });
+    }
+
+  } catch (error) {
+    console.error('🤗 Hugging Face Test Error:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error.message
+    });
+  }
+});
+
+// NEW: Multiple Hugging Face models endpoint
+app.post('/api/hugging-face-multi', async (req, res) => {
+  try {
+    const { prompt, models, task = 'text-generation', max_concurrent = 3 } = req.body;
+
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    if (!process.env.HUGGING_FACE_API_KEY) {
+      return res.status(500).json({ error: 'Hugging Face API key not configured' });
+    }
+
+    // Use provided models or default to reliable ones for the task
+    let modelList = models;
+    if (!modelList && RELIABLE_FREE_MODELS[task]) {
+      modelList = RELIABLE_FREE_MODELS[task];
+    } else if (!modelList) {
+      modelList = ['gpt2', 'microsoft/DialoGPT-medium'];
+    }
+
+    console.log(`🤗 Testing multiple models: ${modelList.join(', ')} with task: ${task}`);
+
+    // Process models in batches to avoid overwhelming the API
+    const results = [];
+    const batchSize = Math.min(max_concurrent, 3);
+    
+    for (let i = 0; i < modelList.length; i += batchSize) {
+      const batch = modelList.slice(i, i + batchSize);
+      console.log(`🤗 Processing batch ${Math.floor(i/batchSize) + 1}: ${batch.join(', ')}`);
+      
+      const batchPromises = batch.map(modelId => 
+        callHuggingFaceModel(prompt, modelId, task)
+      );
+      
+      const batchResults = await Promise.all(batchPromises);
+      results.push(...batchResults);
+      
+      // Add delay between batches to respect rate limits
+      if (i + batchSize < modelList.length) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+
+    // Separate successful and failed results
+    const successful = results.filter(r => r.success);
+    const failed = results.filter(r => !r.success);
+
+    console.log(`✅ Completed: ${successful.length} successful, ${failed.length} failed`);
+
+    res.json({
+      prompt,
+      task,
+      total_models: modelList.length,
+      successful_count: successful.length,
+      failed_count: failed.length,
+      results: {
+        successful: successful.map(r => ({
+          model: r.model,
+          response: r.response,
+          raw_response: r.raw_response
+        })),
+        failed: failed.map(r => ({
+          model: r.model,
+          error: r.error
+        }))
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('🤗 Multi-model error:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error.message
     });
   }
 });
@@ -326,61 +628,6 @@ app.listen(PORT, () => {
   }
   if (!process.env.HUGGING_FACE_API_KEY) {
     console.warn('⚠️  HUGGING_FACE_API_KEY not found');
-  }
-});
-
-// Hugging Face API endpoint
-app.post('/api/hugging-face-test', async (req, res) => {
-  try {
-    const { prompt, model } = req.body;
-    const modelId = model || 'gpt2'; // Default to gpt2 if not provided
-
-    if (!prompt) {
-      return res.status(400).json({ error: 'Prompt is required' });
-    }
-
-    if (!process.env.HUGGING_FACE_API_KEY) {
-      return res.status(500).json({ error: 'Hugging Face API key not configured' });
-    }
-
-    console.log(`🤗 Testing Hugging Face with prompt: "${prompt.substring(0, 50)}..." using model: ${modelId}`);
-
-    // Call the selected Hugging Face model
-    const response = await axios.post(
-      `https://api-inference.huggingface.co/models/${modelId}`,
-      { inputs: prompt },
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.HUGGING_FACE_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 30000
-      }
-    );
-
-    console.log('✅ Hugging Face API call successful');
-
-    res.json({
-      success: true,
-      model: modelId,
-      response: response.data[0]?.generated_text || response.data[0]?.answer || response.data,
-      timestamp: new Date().toISOString()
-    });
-
-  } catch (error) {
-    console.error('🤗 Hugging Face Error:', error.response?.data || error.message);
-
-    let errorMessage = 'Hugging Face API call failed';
-    if (error.response?.status === 401) {
-      errorMessage = 'Authentication failed - check Hugging Face API key';
-    } else if (error.response?.status === 503) {
-      errorMessage = 'Model is loading - try again in a few seconds';
-    }
-
-    res.status(500).json({
-      error: errorMessage,
-      details: error.response?.data || error.message
-    });
   }
 });
 
