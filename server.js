@@ -18,12 +18,25 @@ console.log('==================');
 app.use(cors({
   origin: [
     'https://curam-ai.com.au',
-    'https://curam-ai-agent-mcp-production.up.railway.app'
+    'https://curam-ai-agent-mcp-production.up.railway.app',
+    'http://localhost:8000',
+    'http://localhost:3000',
+    'http://localhost:8080'
   ],
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: false
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: false,
+  optionsSuccessStatus: 200
 }));
+
+// Add CORS debugging
+app.use((req, res, next) => {
+  console.log(`🌐 CORS Request: ${req.method} ${req.path} from ${req.headers.origin}`);
+  res.header('Access-Control-Allow-Origin', req.headers.origin);
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  next();
+});
 app.use(express.json());
 
 // AI API Functions
@@ -313,6 +326,60 @@ app.listen(PORT, () => {
   }
   if (!process.env.HUGGING_FACE_API_KEY) {
     console.warn('⚠️  HUGGING_FACE_API_KEY not found');
+  }
+});
+
+// Hugging Face API endpoint
+app.post('/api/hugging-face-test', async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    if (!process.env.HUGGING_FACE_API_KEY) {
+      return res.status(500).json({ error: 'Hugging Face API key not configured' });
+    }
+
+    console.log(`🤗 Testing Hugging Face with prompt: "${prompt.substring(0, 50)}..."`);
+
+    // Test with GPT-2 model
+    const response = await axios.post(
+      'https://api-inference.huggingface.co/models/gpt2',
+      { inputs: prompt },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.HUGGING_FACE_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000
+      }
+    );
+
+    console.log('✅ Hugging Face API call successful');
+    
+    res.json({
+      success: true,
+      model: 'gpt2',
+      response: response.data[0]?.generated_text || response.data,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('🤗 Hugging Face Error:', error.response?.data || error.message);
+    
+    let errorMessage = 'Hugging Face API call failed';
+    if (error.response?.status === 401) {
+      errorMessage = 'Authentication failed - check Hugging Face API key';
+    } else if (error.response?.status === 503) {
+      errorMessage = 'Model is loading - try again in a few seconds';
+    }
+    
+    res.status(500).json({ 
+      error: errorMessage,
+      details: error.response?.data || error.message
+    });
   }
 });
 
