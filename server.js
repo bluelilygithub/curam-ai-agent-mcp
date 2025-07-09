@@ -332,8 +332,9 @@ app.listen(PORT, () => {
 // Hugging Face API endpoint
 app.post('/api/hugging-face-test', async (req, res) => {
   try {
-    const { prompt } = req.body;
-    
+    const { prompt, model } = req.body;
+    const modelId = model || 'gpt2'; // Default to gpt2 if not provided
+
     if (!prompt) {
       return res.status(400).json({ error: 'Prompt is required' });
     }
@@ -342,11 +343,11 @@ app.post('/api/hugging-face-test', async (req, res) => {
       return res.status(500).json({ error: 'Hugging Face API key not configured' });
     }
 
-    console.log(`🤗 Testing Hugging Face with prompt: "${prompt.substring(0, 50)}..."`);
+    console.log(`🤗 Testing Hugging Face with prompt: "${prompt.substring(0, 50)}..." using model: ${modelId}`);
 
-    // Test with GPT-2 model
+    // Call the selected Hugging Face model
     const response = await axios.post(
-      'https://api-inference.huggingface.co/models/gpt2',
+      `https://api-inference.huggingface.co/models/${modelId}`,
       { inputs: prompt },
       {
         headers: {
@@ -358,25 +359,25 @@ app.post('/api/hugging-face-test', async (req, res) => {
     );
 
     console.log('✅ Hugging Face API call successful');
-    
+
     res.json({
       success: true,
-      model: 'gpt2',
-      response: response.data[0]?.generated_text || response.data,
+      model: modelId,
+      response: response.data[0]?.generated_text || response.data[0]?.answer || response.data,
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
     console.error('🤗 Hugging Face Error:', error.response?.data || error.message);
-    
+
     let errorMessage = 'Hugging Face API call failed';
     if (error.response?.status === 401) {
       errorMessage = 'Authentication failed - check Hugging Face API key';
     } else if (error.response?.status === 503) {
       errorMessage = 'Model is loading - try again in a few seconds';
     }
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       error: errorMessage,
       details: error.response?.data || error.message
     });
