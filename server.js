@@ -143,10 +143,10 @@ app.get('/', (req, res) => {
     endpoints: {
       health: '/health',
       compare: 'POST /api/compare',
-      analyze: 'POST /api/analyze',
+      hugging_face: 'POST /api/hugging-face',
+      intelligent_selection: 'POST /api/intelligent-selection',
       generate_image: 'POST /api/generate-image',
-      send_email: 'POST /api/send-email',
-      multimodal: 'POST /api/multimodal'
+      send_email: 'POST /api/send-email'
     },
     status: 'running'
   });
@@ -233,6 +233,471 @@ app.post('/api/hugging-face', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// NEW: Intelligent Model Selection Endpoint
+app.post('/api/intelligent-selection', async (req, res) => {
+  try {
+    const { task, show_reasoning = true } = req.body;
+    
+    if (!task) {
+      return res.status(400).json({ error: 'Task is required' });
+    }
+
+    console.log(`🧠 Processing intelligent selection for task: "${task.substring(0, 50)}..."`);
+
+    // Step 1: Analyze the task
+    const taskAnalysis = await analyzeTask(task);
+    
+    // Step 2: Select optimal model
+    const selectedModel = await selectOptimalModel(taskAnalysis);
+    
+    // Step 3: Execute with selected model
+    let response;
+    try {
+      switch (selectedModel.id) {
+        case 'gemini_flash':
+          response = await callGeminiFlash(task);
+          break;
+        case 'gemini_pro':
+          response = await callGeminiPro(task);
+          break;
+        case 'gpt2':
+        case 'bert-base-uncased':
+          response = await callHuggingFaceModel(task, selectedModel.id);
+          break;
+        default:
+          response = await callGeminiFlash(task); // Fallback
+      }
+    } catch (error) {
+      // Fallback to Gemini Flash
+      selectedModel.id = 'gemini_flash';
+      selectedModel.name = 'Gemini 1.5 Flash';
+      response = await callGeminiFlash(task);
+    }
+
+    const result = {
+      task,
+      task_analysis: taskAnalysis,
+      selected_model: selectedModel,
+      response,
+      mcp_reasoning: show_reasoning ? {
+        why_selected: `Selected ${selectedModel.name} because it matches task requirements: ${taskAnalysis.requirements.join(', ')}`,
+        confidence_score: selectedModel.score / 10,
+        alternatives_considered: ['gemini_flash', 'gemini_pro', 'gpt2', 'bert-base-uncased'].filter(id => id !== selectedModel.id)
+      } : null,
+      timestamp: new Date().toISOString()
+    };
+
+    res.json(result);
+  } catch (error) {
+    console.error('Intelligent selection error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// NEW: Task Analysis Functions
+async function analyzeTask(taskInput) {
+  // Use Gemini Pro to analyze task complexity and requirements
+  const analysisPrompt = `
+    Analyze this task and provide a JSON response with:
+    - task_type: "simple_question", "complex_analysis", "creative_writing", "technical", "classification"
+    - complexity: "low", "medium", "high"
+    - requirements: ["speed", "accuracy", "creativity", "reasoning", "classification"]
+    - estimated_tokens: number
+    - priority: "speed", "quality", "balance"
+    
+    Task: ${taskInput}
+  `;
+  
+  try {
+    const analysis = await callGeminiPro(analysisPrompt);
+    return JSON.parse(analysis);
+  } catch (error) {
+    // Fallback analysis
+    return {
+      task_type: taskInput.length > 100 ? "complex_analysis" : "simple_question",
+      complexity: taskInput.length > 200 ? "high" : taskInput.length > 50 ? "medium" : "low",
+      requirements: taskInput.includes("creative") ? ["creativity"] : ["accuracy"],
+      estimated_tokens: Math.ceil(taskInput.length / 4),
+      priority: "balance"
+    };
+  }
+}
+
+async function selectOptimalModel(taskAnalysis) {
+  const models = [
+    {
+      id: 'gemini_flash',
+      name: 'Gemini 1.5 Flash',
+      provider: 'Google',
+      characteristics: ['speed', 'efficiency'],
+      bestFor: ['simple_questions', 'quick_responses'],
+      cost: 'low',
+      speed: 'fast'
+    },
+    {
+      id: 'gemini_pro',
+      name: 'Gemini 1.5 Pro',
+      provider: 'Google', 
+      characteristics: ['reasoning', 'analysis'],
+      bestFor: ['complex_analysis', 'reasoning'],
+      cost: 'medium',
+      speed: 'medium'
+    },
+    {
+      id: 'gpt2',
+      name: 'GPT-2',
+      provider: 'Hugging Face',
+      characteristics: ['creative_writing', 'text_generation'],
+      bestFor: ['creative_writing', 'story_generation'],
+      cost: 'very_low',
+      speed: 'medium'
+    },
+    {
+      id: 'bert-base-uncased',
+      name: 'BERT',
+      provider: 'Hugging Face',
+      characteristics: ['text_understanding', 'classification'],
+      bestFor: ['text_analysis', 'classification'],
+      cost: 'very_low',
+      speed: 'fast'
+    }
+  ];
+
+  // Score each model based on task analysis
+  const modelScores = models.map(model => {
+    let score = 0;
+    
+    // Complexity matching
+    if (taskAnalysis.complexity === 'low' && model.characteristics.includes('speed')) score += 3;
+    if (taskAnalysis.complexity === 'high' && model.characteristics.includes('reasoning')) score += 3;
+    
+    // Task type matching
+    if (taskAnalysis.task_type === 'creative_writing' && model.characteristics.includes('creative_writing')) score += 2;
+    if (taskAnalysis.task_type === 'classification' && model.characteristics.includes('classification')) score += 2;
+    if (taskAnalysis.task_type === 'complex_analysis' && model.characteristics.includes('analysis')) score += 2;
+    
+    // Priority matching
+    if (taskAnalysis.priority === 'speed' && model.speed === 'fast') score += 1;
+    if (taskAnalysis.priority === 'quality' && model.cost === 'medium') score += 1;
+    
+    return { ...model, score };
+  });
+
+  // Sort by score and return top model
+  modelScores.sort((a, b) => b.score - a.score);
+  return modelScores[0];
+}
+
+// NEW: Intelligent Model Selection Endpoint
+app.post('/api/intelligent-selection', async (req, res) => {
+  try {
+    const { task, show_reasoning = true } = req.body;
+    
+    if (!task) {
+      return res.status(400).json({ error: 'Task is required' });
+    }
+
+    console.log(`🧠 Processing intelligent selection for task: "${task.substring(0, 50)}..."`);
+
+    // Step 1: Analyze the task
+    const taskAnalysis = await analyzeTask(task);
+    
+    // Step 2: Select optimal model
+    const selectedModel = await selectOptimalModel(taskAnalysis);
+    
+    // Step 3: Execute with selected model
+    let response;
+    try {
+      switch (selectedModel.id) {
+        case 'gemini_flash':
+          response = await callGeminiFlash(task);
+          break;
+        case 'gemini_pro':
+          response = await callGeminiPro(task);
+          break;
+        case 'gpt2':
+        case 'bert-base-uncased':
+          response = await callHuggingFaceModel(task, selectedModel.id);
+          break;
+        default:
+          response = await callGeminiFlash(task); // Fallback
+      }
+    } catch (error) {
+      // Fallback to Gemini Flash
+      selectedModel.id = 'gemini_flash';
+      selectedModel.name = 'Gemini 1.5 Flash';
+      response = await callGeminiFlash(task);
+    }
+
+    const result = {
+      task,
+      task_analysis: taskAnalysis,
+      selected_model: selectedModel,
+      response,
+      mcp_reasoning: show_reasoning ? {
+        why_selected: `Selected ${selectedModel.name} because it matches task requirements: ${taskAnalysis.requirements.join(', ')}`,
+        confidence_score: selectedModel.score / 10,
+        alternatives_considered: ['gemini_flash', 'gemini_pro', 'gpt2', 'bert-base-uncased'].filter(id => id !== selectedModel.id)
+      } : null,
+      timestamp: new Date().toISOString()
+    };
+
+    res.json(result);
+  } catch (error) {
+    console.error('Intelligent selection error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// NEW: Task Analysis Functions
+async function analyzeTask(taskInput) {
+  // Use Gemini Pro to analyze task complexity and requirements
+  const analysisPrompt = `
+    Analyze this task and provide a JSON response with:
+    - task_type: "simple_question", "complex_analysis", "creative_writing", "technical", "classification"
+    - complexity: "low", "medium", "high"
+    - requirements: ["speed", "accuracy", "creativity", "reasoning", "classification"]
+    - estimated_tokens: number
+    - priority: "speed", "quality", "balance"
+    
+    Task: ${taskInput}
+  `;
+  
+  try {
+    const analysis = await callGeminiPro(analysisPrompt);
+    return JSON.parse(analysis);
+  } catch (error) {
+    // Fallback analysis
+    return {
+      task_type: taskInput.length > 100 ? "complex_analysis" : "simple_question",
+      complexity: taskInput.length > 200 ? "high" : taskInput.length > 50 ? "medium" : "low",
+      requirements: taskInput.includes("creative") ? ["creativity"] : ["accuracy"],
+      estimated_tokens: Math.ceil(taskInput.length / 4),
+      priority: "balance"
+    };
+  }
+}
+
+async function selectOptimalModel(taskAnalysis) {
+  const models = [
+    {
+      id: 'gemini_flash',
+      name: 'Gemini 1.5 Flash',
+      provider: 'Google',
+      characteristics: ['speed', 'efficiency'],
+      bestFor: ['simple_questions', 'quick_responses'],
+      cost: 'low',
+      speed: 'fast'
+    },
+    {
+      id: 'gemini_pro',
+      name: 'Gemini 1.5 Pro',
+      provider: 'Google', 
+      characteristics: ['reasoning', 'analysis'],
+      bestFor: ['complex_analysis', 'reasoning'],
+      cost: 'medium',
+      speed: 'medium'
+    },
+    {
+      id: 'gpt2',
+      name: 'GPT-2',
+      provider: 'Hugging Face',
+      characteristics: ['creative_writing', 'text_generation'],
+      bestFor: ['creative_writing', 'story_generation'],
+      cost: 'very_low',
+      speed: 'medium'
+    },
+    {
+      id: 'bert-base-uncased',
+      name: 'BERT',
+      provider: 'Hugging Face',
+      characteristics: ['text_understanding', 'classification'],
+      bestFor: ['text_analysis', 'classification'],
+      cost: 'very_low',
+      speed: 'fast'
+    }
+  ];
+
+  // Score each model based on task analysis
+  const modelScores = models.map(model => {
+    let score = 0;
+    
+    // Complexity matching
+    if (taskAnalysis.complexity === 'low' && model.characteristics.includes('speed')) score += 3;
+    if (taskAnalysis.complexity === 'high' && model.characteristics.includes('reasoning')) score += 3;
+    
+    // Task type matching
+    if (taskAnalysis.task_type === 'creative_writing' && model.characteristics.includes('creative_writing')) score += 2;
+    if (taskAnalysis.task_type === 'classification' && model.characteristics.includes('classification')) score += 2;
+    if (taskAnalysis.task_type === 'complex_analysis' && model.characteristics.includes('analysis')) score += 2;
+    
+    // Priority matching
+    if (taskAnalysis.priority === 'speed' && model.speed === 'fast') score += 1;
+    if (taskAnalysis.priority === 'quality' && model.cost === 'medium') score += 1;
+    
+    return { ...model, score };
+  });
+
+  // Sort by score and return top model
+  modelScores.sort((a, b) => b.score - a.score);
+  return modelScores[0];
+}
+
+// NEW: Intelligent Model Selection Endpoint
+app.post('/api/intelligent-selection', async (req, res) => {
+  try {
+    const { task, show_reasoning = true } = req.body;
+    
+    if (!task) {
+      return res.status(400).json({ error: 'Task is required' });
+    }
+
+    console.log(`🧠 Processing intelligent selection for task: "${task.substring(0, 50)}..."`);
+
+    // Step 1: Analyze the task
+    const taskAnalysis = await analyzeTask(task);
+    
+    // Step 2: Select optimal model
+    const selectedModel = await selectOptimalModel(taskAnalysis);
+    
+    // Step 3: Execute with selected model
+    let response;
+    try {
+      switch (selectedModel.id) {
+        case 'gemini_flash':
+          response = await callGeminiFlash(task);
+          break;
+        case 'gemini_pro':
+          response = await callGeminiPro(task);
+          break;
+        case 'gpt2':
+        case 'bert-base-uncased':
+          response = await callHuggingFaceModel(task, selectedModel.id);
+          break;
+        default:
+          response = await callGeminiFlash(task); // Fallback
+      }
+    } catch (error) {
+      // Fallback to Gemini Flash
+      selectedModel.id = 'gemini_flash';
+      selectedModel.name = 'Gemini 1.5 Flash';
+      response = await callGeminiFlash(task);
+    }
+
+    const result = {
+      task,
+      task_analysis: taskAnalysis,
+      selected_model: selectedModel,
+      response,
+      mcp_reasoning: show_reasoning ? {
+        why_selected: `Selected ${selectedModel.name} because it matches task requirements: ${taskAnalysis.requirements.join(', ')}`,
+        confidence_score: selectedModel.score / 10,
+        alternatives_considered: ['gemini_flash', 'gemini_pro', 'gpt2', 'bert-base-uncased'].filter(id => id !== selectedModel.id)
+      } : null,
+      timestamp: new Date().toISOString()
+    };
+
+    res.json(result);
+  } catch (error) {
+    console.error('Intelligent selection error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// NEW: Task Analysis Functions
+async function analyzeTask(taskInput) {
+  // Use Gemini Pro to analyze task complexity and requirements
+  const analysisPrompt = `
+    Analyze this task and provide a JSON response with:
+    - task_type: "simple_question", "complex_analysis", "creative_writing", "technical", "classification"
+    - complexity: "low", "medium", "high"
+    - requirements: ["speed", "accuracy", "creativity", "reasoning", "classification"]
+    - estimated_tokens: number
+    - priority: "speed", "quality", "balance"
+    
+    Task: ${taskInput}
+  `;
+  
+  try {
+    const analysis = await callGeminiPro(analysisPrompt);
+    return JSON.parse(analysis);
+  } catch (error) {
+    // Fallback analysis
+    return {
+      task_type: taskInput.length > 100 ? "complex_analysis" : "simple_question",
+      complexity: taskInput.length > 200 ? "high" : taskInput.length > 50 ? "medium" : "low",
+      requirements: taskInput.includes("creative") ? ["creativity"] : ["accuracy"],
+      estimated_tokens: Math.ceil(taskInput.length / 4),
+      priority: "balance"
+    };
+  }
+}
+
+async function selectOptimalModel(taskAnalysis) {
+  const models = [
+    {
+      id: 'gemini_flash',
+      name: 'Gemini 1.5 Flash',
+      provider: 'Google',
+      characteristics: ['speed', 'efficiency'],
+      bestFor: ['simple_questions', 'quick_responses'],
+      cost: 'low',
+      speed: 'fast'
+    },
+    {
+      id: 'gemini_pro',
+      name: 'Gemini 1.5 Pro',
+      provider: 'Google', 
+      characteristics: ['reasoning', 'analysis'],
+      bestFor: ['complex_analysis', 'reasoning'],
+      cost: 'medium',
+      speed: 'medium'
+    },
+    {
+      id: 'gpt2',
+      name: 'GPT-2',
+      provider: 'Hugging Face',
+      characteristics: ['creative_writing', 'text_generation'],
+      bestFor: ['creative_writing', 'story_generation'],
+      cost: 'very_low',
+      speed: 'medium'
+    },
+    {
+      id: 'bert-base-uncased',
+      name: 'BERT',
+      provider: 'Hugging Face',
+      characteristics: ['text_understanding', 'classification'],
+      bestFor: ['text_analysis', 'classification'],
+      cost: 'very_low',
+      speed: 'fast'
+    }
+  ];
+
+  // Score each model based on task analysis
+  const modelScores = models.map(model => {
+    let score = 0;
+    
+    // Complexity matching
+    if (taskAnalysis.complexity === 'low' && model.characteristics.includes('speed')) score += 3;
+    if (taskAnalysis.complexity === 'high' && model.characteristics.includes('reasoning')) score += 3;
+    
+    // Task type matching
+    if (taskAnalysis.task_type === 'creative_writing' && model.characteristics.includes('creative_writing')) score += 2;
+    if (taskAnalysis.task_type === 'classification' && model.characteristics.includes('classification')) score += 2;
+    if (taskAnalysis.task_type === 'complex_analysis' && model.characteristics.includes('analysis')) score += 2;
+    
+    // Priority matching
+    if (taskAnalysis.priority === 'speed' && model.speed === 'fast') score += 1;
+    if (taskAnalysis.priority === 'quality' && model.cost === 'medium') score += 1;
+    
+    return { ...model, score };
+  });
+
+  // Sort by score and return top model
+  modelScores.sort((a, b) => b.score - a.score);
+  return modelScores[0];
+}
 
 // Generate Image
 app.post('/api/generate-image', async (req, res) => {
