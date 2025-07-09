@@ -1,29 +1,30 @@
-// mcp-server.js - ACTUAL MCP Protocol Implementation
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ErrorCode,
-  ListToolsRequestSchema,
-  McpError,
-} from '@modelcontextprotocol/sdk/types.js';
+// server.js - MCP Agent with Gemini + Stability.AI + Hugging Face + Email
+import express from 'express';
+import cors from 'cors';
 import axios from 'axios';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Create MCP server instance
-const server = new Server(
-  {
-    name: 'curam-ai-mcp-server',
-    version: '1.0.0',
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  }
-);
+const app = express();
+const PORT = process.env.PORT || 8080;
+
+console.log('=== PORT DEBUG ===');
+console.log('process.env.PORT:', process.env.PORT);
+console.log('Final PORT:', PORT);
+console.log('==================');
+
+// Middleware
+app.use(cors({
+  origin: [
+    'https://curam-ai.com.au',
+    'https://curam-ai-agent-mcp-production.up.railway.app'
+  ],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false
+}));
+app.use(express.json());
 
 // AI API Functions
 async function callGeminiFlash(prompt) {
@@ -39,10 +40,8 @@ async function callGeminiFlash(prompt) {
     );
     return response.data.candidates[0].content.parts[0].text;
   } catch (error) {
-    throw new McpError(
-      ErrorCode.InternalError,
-      `Gemini Flash Error: ${error.response?.data?.error?.message || error.message}`
-    );
+    console.error('Gemini Flash Error:', error.response?.data || error.message);
+    return `Gemini Flash Error: ${error.response?.data?.error?.message || error.message}`;
   }
 }
 
@@ -59,10 +58,8 @@ async function callGeminiPro(prompt) {
     );
     return response.data.candidates[0].content.parts[0].text;
   } catch (error) {
-    throw new McpError(
-      ErrorCode.InternalError,
-      `Gemini Pro Error: ${error.response?.data?.error?.message || error.message}`
-    );
+    console.error('Gemini Pro Error:', error.response?.data || error.message);
+    return `Gemini Pro Error: ${error.response?.data?.error?.message || error.message}`;
   }
 }
 
@@ -96,44 +93,8 @@ async function callHuggingFaceModel(prompt, modelId) {
       return JSON.stringify(response.data);
     }
   } catch (error) {
-    throw new McpError(
-      ErrorCode.InternalError,
-      `Hugging Face ${modelId} Error: ${error.response?.data?.error || error.message}`
-    );
-  }
-}
-
-async function generateImage(prompt, style = 'photographic') {
-  try {
-    const response = await axios.post(
-      'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image',
-      {
-        text_prompts: [{ text: prompt, weight: 1 }],
-        cfg_scale: 7,
-        height: 1024,
-        width: 1024,
-        samples: 1,
-        steps: 30,
-        style_preset: style
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`,
-          'Accept': 'application/json'
-        }
-      }
-    );
-    
-    return {
-      image: response.data.artifacts[0].base64,
-      seed: response.data.artifacts[0].seed
-    };
-  } catch (error) {
-    throw new McpError(
-      ErrorCode.InternalError,
-      `Stability Error: ${error.response?.data?.message || error.message}`
-    );
+    console.error(`Hugging Face ${modelId} Error:`, error.response?.data || error.message);
+    return `Hugging Face ${modelId} Error: ${error.response?.data?.error || error.message}`;
   }
 }
 
@@ -231,475 +192,462 @@ async function selectOptimalModel(taskAnalysis) {
   return modelScores[0];
 }
 
-// MCP Tool Definitions
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
+async function generateImage(prompt, style = 'photographic') {
+  try {
+    const response = await axios.post(
+      'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image',
       {
-        name: 'compare_gemini_models',
-        description: 'Compare responses from Gemini 1.5 Flash and Gemini 1.5 Pro models',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            prompt: {
-              type: 'string',
-              description: 'The prompt to send to both models for comparison'
-            }
-          },
-          required: ['prompt']
-        }
+        text_prompts: [{ text: prompt, weight: 1 }],
+        cfg_scale: 7,
+        height: 1024,
+        width: 1024,
+        samples: 1,
+        steps: 30,
+        style_preset: style
       },
       {
-        name: 'generate_image',
-        description: 'Generate an image using Stable Diffusion XL',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            prompt: {
-              type: 'string',
-              description: 'Description of the image to generate'
-            },
-            style: {
-              type: 'string',
-              description: 'Art style for the image',
-              enum: ['photographic', 'digital-art', 'cinematic', 'anime', 'fantasy-art'],
-              default: 'photographic'
-            }
-          },
-          required: ['prompt']
-        }
-      },
-      {
-        name: 'analyze_text',
-        description: 'Analyze text with Gemini Pro for advanced reasoning tasks',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            text: {
-              type: 'string',
-              description: 'Text to analyze'
-            },
-            analysis_type: {
-              type: 'string',
-              description: 'Type of analysis to perform',
-              enum: ['sentiment', 'summary', 'technical', 'creative', 'logical'],
-              default: 'summary'
-            }
-          },
-          required: ['text']
-        }
-      },
-      // NEW: Intelligent Model Selection Tools
-      {
-        name: 'intelligent_model_selection',
-        description: 'MCP intelligently selects the optimal AI model based on task analysis',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            task: {
-              type: 'string',
-              description: 'The task or question to analyze and execute'
-            },
-            show_reasoning: {
-              type: 'boolean',
-              description: 'Whether to include detailed reasoning for model selection',
-              default: true
-            }
-          },
-          required: ['task']
-        }
-      },
-      {
-        name: 'compare_all_models',
-        description: 'Compare responses across all available models (Google + Hugging Face)',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            prompt: {
-              type: 'string',
-              description: 'The prompt to send to all models'
-            },
-            include_hugging_face: {
-              type: 'boolean',
-              description: 'Whether to include Hugging Face models in comparison',
-              default: true
-            }
-          },
-          required: ['prompt']
-        }
-      },
-      {
-        name: 'hugging_face_text_generation',
-        description: 'Generate text using Hugging Face models (GPT-2, BERT, etc.)',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            prompt: {
-              type: 'string',
-              description: 'Text prompt for generation'
-            },
-            model_id: {
-              type: 'string',
-              description: 'Hugging Face model ID',
-              enum: ['gpt2', 'bert-base-uncased', 't5-base'],
-              default: 'gpt2'
-            }
-          },
-          required: ['prompt']
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`,
+          'Accept': 'application/json'
         }
       }
-    ]
-  };
+    );
+    
+    return {
+      image: response.data.artifacts[0].base64,
+      seed: response.data.artifacts[0].seed
+    };
+  } catch (error) {
+    console.error('Stability Error:', error.response?.data || error.message);
+    return `Stability Error: ${error.response?.data?.message || error.message}`;
+  }
+}
+
+// Routes
+app.get('/', (req, res) => {
+  res.json({
+    name: 'Curam AI MCP Agent',
+    version: '1.0.0',
+    description: 'MCP agent with Gemini models, Stability.AI, Hugging Face, and Email',
+    models: {
+      text: ['Gemini 1.5 Flash', 'Gemini 1.5 Pro', 'GPT-2 (Hugging Face)', 'BERT (Hugging Face)'],
+      image: ['Stable Diffusion XL']
+    },
+    endpoints: {
+      health: '/health',
+      compare: 'POST /api/compare',
+      analyze: 'POST /api/analyze',
+      generate_image: 'POST /api/generate-image',
+      send_email: 'POST /api/send-email',
+      intelligent_selection: 'POST /api/intelligent-selection',
+      hugging_face: 'POST /api/hugging-face',
+      compare_all_models: 'POST /api/compare-all-models'
+    },
+    status: 'running'
+  });
 });
 
-// MCP Tool Handlers
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    models: {
+      gemini: !!process.env.GEMINI_API_KEY,
+      stability: !!process.env.STABILITY_API_KEY,
+      hugging_face: !!process.env.HUGGING_FACE_API_KEY,
+      mailchannels: !!process.env.MAILCHANNELS_API_KEY
+    }
+  });
+});
 
+// Compare Gemini Models
+app.post('/api/compare', async (req, res) => {
   try {
-    switch (name) {
-      case 'compare_gemini_models': {
-        const { prompt } = args;
-        
-        if (!prompt || typeof prompt !== 'string') {
-          throw new McpError(ErrorCode.InvalidParams, 'Prompt is required and must be a string');
+    const { prompt } = req.body;
+    
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    console.log(`📝 Processing compare request for prompt: "${prompt.substring(0, 50)}..."`);
+
+    const [flashResponse, proResponse] = await Promise.all([
+      callGeminiFlash(prompt),
+      callGeminiPro(prompt)
+    ]);
+    
+    res.json({
+      prompt,
+      responses: {
+        gemini_flash: {
+          model: 'Gemini 1.5 Flash',
+          response: flashResponse,
+          characteristics: 'Fast, cost-effective'
+        },
+        gemini_pro: {
+          model: 'Gemini 1.5 Pro',
+          response: proResponse,
+          characteristics: 'Higher quality, better reasoning'
         }
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Compare error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
-        // Call both models in parallel
-        const [flashResponse, proResponse] = await Promise.all([
-          callGeminiFlash(prompt),
-          callGeminiPro(prompt)
-        ]);
+// NEW: Intelligent Model Selection
+app.post('/api/intelligent-selection', async (req, res) => {
+  try {
+    const { task, show_reasoning = true } = req.body;
+    
+    if (!task) {
+      return res.status(400).json({ error: 'Task is required' });
+    }
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                prompt,
-                comparison: {
-                  gemini_flash: {
-                    model: 'Gemini 1.5 Flash',
-                    response: flashResponse,
-                    characteristics: 'Fast, cost-effective, good for simple tasks'
-                  },
-                  gemini_pro: {
-                    model: 'Gemini 1.5 Pro',
-                    response: proResponse,
-                    characteristics: 'Advanced reasoning, better for complex tasks'
-                  }
-                },
-                analysis: {
-                  flash_length: flashResponse.length,
-                  pro_length: proResponse.length,
-                  difference: 'Pro model typically provides more detailed and nuanced responses'
-                },
-                timestamp: new Date().toISOString()
-              }, null, 2)
-            }
-          ]
-        };
+    console.log(`🧠 Processing intelligent selection for task: "${task.substring(0, 50)}..."`);
+
+    // Step 1: Analyze the task
+    const taskAnalysis = await analyzeTask(task);
+    
+    // Step 2: Select optimal model
+    const selectedModel = await selectOptimalModel(taskAnalysis);
+    
+    // Step 3: Execute with selected model
+    let response;
+    try {
+      switch (selectedModel.id) {
+        case 'gemini_flash':
+          response = await callGeminiFlash(task);
+          break;
+        case 'gemini_pro':
+          response = await callGeminiPro(task);
+          break;
+        case 'gpt2':
+        case 'bert-base-uncased':
+          response = await callHuggingFaceModel(task, selectedModel.id);
+          break;
+        default:
+          response = await callGeminiFlash(task); // Fallback
       }
+    } catch (error) {
+      // Fallback to Gemini Flash
+      selectedModel.id = 'gemini_flash';
+      selectedModel.name = 'Gemini 1.5 Flash';
+      response = await callGeminiFlash(task);
+    }
 
-      case 'generate_image': {
-        const { prompt, style = 'photographic' } = args;
+    const result = {
+      task,
+      task_analysis: taskAnalysis,
+      selected_model: selectedModel,
+      response,
+      mcp_reasoning: show_reasoning ? {
+        why_selected: `Selected ${selectedModel.name} because it matches task requirements: ${taskAnalysis.requirements.join(', ')}`,
+        confidence_score: selectedModel.score / 10,
+        alternatives_considered: ['gemini_flash', 'gemini_pro', 'gpt2', 'bert-base-uncased'].filter(id => id !== selectedModel.id)
+      } : null,
+      timestamp: new Date().toISOString()
+    };
+
+    res.json(result);
+  } catch (error) {
+    console.error('Intelligent selection error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// NEW: Compare All Models (Google + Hugging Face)
+app.post('/api/compare-all-models', async (req, res) => {
+  try {
+    const { prompt, include_hugging_face = true } = req.body;
+    
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    console.log(`🔄 Comparing all models for prompt: "${prompt.substring(0, 50)}..."`);
+
+    const models = [
+      { id: 'gemini_flash', name: 'Gemini 1.5 Flash', call: () => callGeminiFlash(prompt) },
+      { id: 'gemini_pro', name: 'Gemini 1.5 Pro', call: () => callGeminiPro(prompt) }
+    ];
+
+    if (include_hugging_face) {
+      models.push(
+        { id: 'gpt2', name: 'GPT-2 (Hugging Face)', call: () => callHuggingFaceModel(prompt, 'gpt2') },
+        { id: 'bert-base-uncased', name: 'BERT (Hugging Face)', call: () => callHuggingFaceModel(prompt, 'bert-base-uncased') }
+      );
+    }
+
+    const results = {};
+    const promises = models.map(async (model) => {
+      try {
+        const startTime = Date.now();
+        const response = await model.call();
+        const endTime = Date.now();
         
-        if (!prompt || typeof prompt !== 'string') {
-          throw new McpError(ErrorCode.InvalidParams, 'Prompt is required and must be a string');
-        }
-
-        const result = await generateImage(prompt, style);
-
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                prompt,
-                style,
-                image_data: `data:image/png;base64,${result.image}`,
-                seed: result.seed,
-                metadata: {
-                  model: 'Stable Diffusion XL 1024',
-                  dimensions: '1024x1024',
-                  timestamp: new Date().toISOString()
-                }
-              }, null, 2)
-            }
-          ]
-        };
-      }
-
-      case 'analyze_text': {
-        const { text, analysis_type = 'summary' } = args;
-        
-        if (!text || typeof text !== 'string') {
-          throw new McpError(ErrorCode.InvalidParams, 'Text is required and must be a string');
-        }
-
-        let analysisPrompt;
-        switch (analysis_type) {
-          case 'sentiment':
-            analysisPrompt = `Analyze the sentiment of this text. Provide sentiment score (-1 to 1), emotional tone, and key sentiment indicators:\n\n${text}`;
-            break;
-          case 'summary':
-            analysisPrompt = `Provide a concise summary of this text, highlighting the main points:\n\n${text}`;
-            break;
-          case 'technical':
-            analysisPrompt = `Analyze this text from a technical perspective. Identify technical concepts, accuracy, and complexity level:\n\n${text}`;
-            break;
-          case 'creative':
-            analysisPrompt = `Analyze the creative elements of this text. Look at literary devices, creativity, and artistic merit:\n\n${text}`;
-            break;
-          case 'logical':
-            analysisPrompt = `Analyze the logical structure of this text. Identify arguments, reasoning patterns, and logical fallacies:\n\n${text}`;
-            break;
-          default:
-            analysisPrompt = `Analyze this text:\n\n${text}`;
-        }
-
-        const analysis = await callGeminiPro(analysisPrompt);
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                original_text: text,
-                analysis_type,
-                analysis,
-                metadata: {
-                  model: 'Gemini 1.5 Pro',
-                  text_length: text.length,
-                  analysis_length: analysis.length,
-                  timestamp: new Date().toISOString()
-                }
-              }, null, 2)
-            }
-          ]
-        };
-      }
-
-      // NEW: Intelligent Model Selection Handler
-      case 'intelligent_model_selection': {
-        const { task, show_reasoning = true } = args;
-        
-        if (!task || typeof task !== 'string') {
-          throw new McpError(ErrorCode.InvalidParams, 'Task is required and must be a string');
-        }
-
-        // Step 1: Analyze the task
-        const taskAnalysis = await analyzeTask(task);
-        
-        // Step 2: Select optimal model
-        const selectedModel = await selectOptimalModel(taskAnalysis);
-        
-        // Step 3: Execute with selected model
-        let response;
-        switch (selectedModel.id) {
-          case 'gemini_flash':
-            response = await callGeminiFlash(task);
-            break;
-          case 'gemini_pro':
-            response = await callGeminiPro(task);
-            break;
-          case 'gpt2':
-          case 'bert-base-uncased':
-            response = await callHuggingFaceModel(task, selectedModel.id);
-            break;
-          default:
-            response = await callGeminiFlash(task); // Fallback
-        }
-
-        const result = {
-          task,
-          task_analysis: taskAnalysis,
-          selected_model: selectedModel,
+          model_id: model.id,
+          model_name: model.name,
           response,
-          mcp_reasoning: show_reasoning ? {
-            why_selected: `Selected ${selectedModel.name} because it matches task requirements: ${taskAnalysis.requirements.join(', ')}`,
-            confidence_score: selectedModel.score / 10, // Normalize to 0-1
-            alternatives_considered: ['gemini_flash', 'gemini_pro', 'gpt2', 'bert-base-uncased'].filter(id => id !== selectedModel.id)
-          } : null,
-          timestamp: new Date().toISOString()
+          response_time: endTime - startTime,
+          success: true
         };
-
+      } catch (error) {
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
+          model_id: model.id,
+          model_name: model.name,
+          error: error.message,
+          success: false
         };
       }
+    });
 
-      // NEW: Compare All Models Handler
-      case 'compare_all_models': {
-        const { prompt, include_hugging_face = true } = args;
+    const modelResults = await Promise.all(promises);
+    modelResults.forEach(result => {
+      results[result.model_id] = result;
+    });
+
+    res.json({
+      prompt,
+      comparison_results: results,
+      summary: {
+        total_models: models.length,
+        successful_models: modelResults.filter(r => r.success).length,
+        average_response_time: modelResults.filter(r => r.success).reduce((sum, r) => sum + r.response_time, 0) / modelResults.filter(r => r.success).length
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Compare all models error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// NEW: Hugging Face Operations
+app.post('/api/hugging-face', async (req, res) => {
+  try {
+    const { action, prompt, model_id = 'gpt2', options = {} } = req.body;
+    
+    if (!process.env.HUGGING_FACE_API_KEY) {
+      return res.status(500).json({ error: 'Hugging Face API key not configured' });
+    }
+
+    switch (action) {
+      case 'generate_text':
+        if (!prompt) {
+          return res.status(400).json({ error: 'Prompt is required for text generation' });
+        }
+        const textResult = await callHuggingFaceModel(prompt, model_id);
+        res.json({
+          prompt,
+          model_id,
+          response: textResult,
+          metadata: {
+            provider: 'Hugging Face',
+            model_name: model_id,
+            prompt_length: prompt.length,
+            response_length: textResult.length,
+            timestamp: new Date().toISOString()
+          }
+        });
+        break;
         
-        if (!prompt || typeof prompt !== 'string') {
-          throw new McpError(ErrorCode.InvalidParams, 'Prompt is required and must be a string');
+      case 'compare_models':
+        if (!prompt) {
+          return res.status(400).json({ error: 'Prompt is required for model comparison' });
         }
-
-        const models = [
-          { id: 'gemini_flash', name: 'Gemini 1.5 Flash', call: () => callGeminiFlash(prompt) },
-          { id: 'gemini_pro', name: 'Gemini 1.5 Pro', call: () => callGeminiPro(prompt) }
-        ];
-
-        if (include_hugging_face) {
-          models.push(
-            { id: 'gpt2', name: 'GPT-2 (Hugging Face)', call: () => callHuggingFaceModel(prompt, 'gpt2') },
-            { id: 'bert-base-uncased', name: 'BERT (Hugging Face)', call: () => callHuggingFaceModel(prompt, 'bert-base-uncased') }
-          );
-        }
-
+        const models = ['gpt2', 'bert-base-uncased'];
         const results = {};
-        const promises = models.map(async (model) => {
+        
+        for (const modelId of models) {
           try {
             const startTime = Date.now();
-            const response = await model.call();
+            const response = await callHuggingFaceModel(prompt, modelId);
             const endTime = Date.now();
             
-            return {
-              model_id: model.id,
-              model_name: model.name,
+            results[modelId] = {
+              model_name: modelId,
               response,
               response_time: endTime - startTime,
               success: true
             };
           } catch (error) {
-            return {
-              model_id: model.id,
-              model_name: model.name,
+            results[modelId] = {
+              model_name: modelId,
               error: error.message,
               success: false
             };
           }
-        });
-
-        const modelResults = await Promise.all(promises);
-        modelResults.forEach(result => {
-          results[result.model_id] = result;
-        });
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                prompt,
-                comparison_results: results,
-                summary: {
-                  total_models: models.length,
-                  successful_models: modelResults.filter(r => r.success).length,
-                  average_response_time: modelResults.filter(r => r.success).reduce((sum, r) => sum + r.response_time, 0) / modelResults.filter(r => r.success).length
-                },
-                timestamp: new Date().toISOString()
-              }, null, 2)
-            }
-          ]
-        };
-      }
-
-      // NEW: Hugging Face Text Generation Handler
-      case 'hugging_face_text_generation': {
-        const { prompt, model_id = 'gpt2' } = args;
+        }
         
-        if (!prompt || typeof prompt !== 'string') {
-          throw new McpError(ErrorCode.InvalidParams, 'Prompt is required and must be a string');
-        }
-
-        if (!process.env.HUGGING_FACE_API_KEY) {
-          throw new McpError(ErrorCode.InternalError, 'Hugging Face API key not configured');
-        }
-
-        const response = await callHuggingFaceModel(prompt, model_id);
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                prompt,
-                model_id,
-                response,
-                metadata: {
-                  provider: 'Hugging Face',
-                  model_name: model_id,
-                  prompt_length: prompt.length,
-                  response_length: response.length,
-                  timestamp: new Date().toISOString()
-                }
-              }, null, 2)
-            }
-          ]
-        };
-      }
-
+        res.json({
+          prompt,
+          comparison_results: results,
+          timestamp: new Date().toISOString()
+        });
+        break;
+        
       default:
-        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+        res.status(400).json({ error: 'Invalid action. Use "generate_text" or "compare_models"' });
     }
   } catch (error) {
-    if (error instanceof McpError) {
-      throw error;
-    }
-    throw new McpError(ErrorCode.InternalError, `Tool execution failed: ${error.message}`);
+    console.error('Hugging Face error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Error handling
-server.onerror = (error) => {
-  console.error('[MCP Server Error]', error);
-};
+// Generate Image
+app.post('/api/generate-image', async (req, res) => {
+  try {
+    const { prompt, style = 'photographic' } = req.body;
+    
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
 
-process.on('SIGINT', async () => {
-  console.log('\n🛑 Shutting down MCP server...');
-  await server.close();
-  process.exit(0);
+    console.log(`🎨 Generating image for prompt: "${prompt.substring(0, 50)}..." with style: ${style}`);
+
+    const imageResult = await generateImage(prompt, style);
+    
+    if (typeof imageResult === 'string') {
+      return res.status(500).json({ error: imageResult });
+    }
+    
+    res.json({
+      prompt,
+      style,
+      image_base64: imageResult.image,
+      seed: imageResult.seed,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Image generation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
-// Start the MCP server
-async function main() {
-  const transport = new StdioServerTransport();
-  
-  console.log('🚀 Starting Curam AI MCP Server...');
-  console.log('📋 Available tools:');
-  console.log('   • compare_gemini_models - Compare Gemini Flash vs Pro');
-  console.log('   • generate_image - Create images with Stable Diffusion XL');
-  console.log('   • analyze_text - Advanced text analysis with Gemini Pro');
-  console.log('   • intelligent_model_selection - MCP intelligent model selection');
-  console.log('   • compare_all_models - Compare across all providers');
-  console.log('   • hugging_face_text_generation - Hugging Face text generation');
-  console.log('💡 This server follows the MCP protocol specification');
+// Send Email with MailChannels - Fixed Authentication
+app.post('/api/send-email', async (req, res) => {
+  try {
+    const { to, subject, message, pdf_base64 } = req.body;
+    
+    if (!to || !subject || !message) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: to, subject, message' 
+      });
+    }
+
+    console.log(`📧 Sending email to: ${to} with subject: "${subject.substring(0, 30)}..."`);
+
+    // Check if API key is present
+    if (!process.env.MAILCHANNELS_API_KEY) {
+      console.error('📧 MAILCHANNELS_API_KEY not found in environment variables');
+      return res.status(500).json({ 
+        error: 'Email service not configured - API key missing' 
+      });
+    }
+
+    // MailChannels API call - Correct format
+    const emailData = {
+      personalizations: [{
+        to: [{ email: to }]
+      }],
+      from: { 
+        email: 'michael@curam-ai.com.au',
+        name: 'Curam AI MCP Agent'
+      },
+      subject: subject,
+      content: [{
+        type: 'text/html',
+        value: message.replace(/\n/g, '<br>')
+      }]
+    };
+
+    // Add PDF attachment if provided
+    if (pdf_base64) {
+      emailData.attachments = [{
+        content: pdf_base64,
+        filename: 'MCP_Session_Report.pdf',
+        type: 'application/pdf'
+      }];
+    }
+
+    // Debug logging
+    console.log('📧 API Key present:', !!process.env.MAILCHANNELS_API_KEY);
+    console.log('📧 API Key first 10 chars:', process.env.MAILCHANNELS_API_KEY?.substring(0, 10));
+
+    const response = await axios.post(
+      'https://api.mailchannels.net/tx/v1/send',
+      emailData,
+      {
+        headers: {
+          'X-API-Key': process.env.MAILCHANNELS_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+
+    console.log(`✅ Email sent successfully to ${to}`, response.data);
+    
+    res.json({ 
+      status: 'sent', 
+      message: 'Email sent successfully!',
+      message_id: response.data.message_id || 'sent',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('📧 Detailed email error:', {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+      config: error.config?.url
+    });
+    
+    // More specific error messages
+    let errorMessage = 'Email sending failed';
+    if (error.response?.status === 401) {
+      errorMessage = 'Authentication failed - check API key or domain verification';
+    } else if (error.response?.status === 403) {
+      errorMessage = 'Forbidden - domain not verified or sending limit reached';
+    } else if (error.code === 'ECONNABORTED') {
+      errorMessage = 'Request timeout - email service unavailable';
+    }
+    
+    res.status(500).json({ 
+      error: errorMessage,
+      details: error.response?.data || error.message,
+      status_code: error.response?.status
+    });
+  }
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 Curam AI MCP Agent running on port ${PORT}`);
+  console.log(`📊 Health check available at /health`);
+  console.log(`🌐 API endpoints ready at https://curam-ai-agent-mcp-production.up.railway.app`);
+  console.log(`🧠 NEW: Intelligent Model Selection with Hugging Face integration!`);
   
   if (!process.env.GEMINI_API_KEY) {
-    console.warn('⚠️  GEMINI_API_KEY not found - text tools will fail');
+    console.warn('⚠️  GEMINI_API_KEY not found');
   }
   if (!process.env.STABILITY_API_KEY) {
-    console.warn('⚠️  STABILITY_API_KEY not found - image generation will fail');
+    console.warn('⚠️  STABILITY_API_KEY not found');
   }
   if (!process.env.HUGGING_FACE_API_KEY) {
-    console.warn('⚠️  HUGGING_FACE_API_KEY not found - Hugging Face tools will fail');
+    console.warn('⚠️  HUGGING_FACE_API_KEY not found - Hugging Face features disabled');
   }
-  
-  await server.connect(transport);
-  console.log('✅ MCP Server connected and ready!');
-}
-
-// Handle uncaught errors
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  process.exit(1);
+  if (!process.env.MAILCHANNELS_API_KEY) {
+    console.warn('⚠️  MAILCHANNELS_API_KEY not found');
+  }
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
-});
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch(console.error);
-}
-
-export default server; 
+export default app; 
