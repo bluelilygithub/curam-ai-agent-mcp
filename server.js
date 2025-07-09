@@ -1,4 +1,4 @@
-// server.js - MCP Agent with Gemini + Stability.AI + Email + Enhanced Hugging Face
+// server.js - MCP Agent with Gemini + Stability.AI + Email + Claude API
 import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
@@ -9,12 +9,10 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-console.log('=== SERVER STARTUP ===');
-console.log('Node version:', process.version);
-console.log('Environment:', process.env.NODE_ENV || 'development');
+console.log('=== PORT DEBUG ===');
 console.log('process.env.PORT:', process.env.PORT);
 console.log('Final PORT:', PORT);
-console.log('======================');
+console.log('==================');
 
 // Middleware
 app.use(cors({
@@ -31,270 +29,122 @@ app.use(cors({
   optionsSuccessStatus: 200
 }));
 
-// Enhanced CORS debugging
+// Add CORS debugging
 app.use((req, res, next) => {
-  const timestamp = new Date().toISOString();
-  console.log(`🌐 [${timestamp}] ${req.method} ${req.path} from ${req.headers.origin || 'unknown'}`);
+  console.log(`🌐 CORS Request: ${req.method} ${req.path} from ${req.headers.origin}`);
   res.header('Access-Control-Allow-Origin', req.headers.origin);
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
   next();
 });
+app.use(express.json());
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// Request logging middleware
-app.use((req, res, next) => {
-  const start = Date.now();
-  res.on('finish', () => {
-    const duration = Date.now() - start;
-    console.log(`📊 ${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
-  });
-  next();
-});
-
-// Reliable models for free tier
-const RELIABLE_FREE_MODELS = {
-  'text-generation': [
-    'gpt2',
-    'microsoft/DialoGPT-medium',
-    'EleutherAI/gpt-neo-1.3B'
-  ],
-  'text-classification': [
-    'distilbert-base-uncased-finetuned-sst-2-english',
-    'cardiffnlp/twitter-roberta-base-sentiment-latest'
-  ],
-  'question-answering': [
-    'distilbert-base-cased-distilled-squad',
-    'deepset/roberta-base-squad2'
-  ],
-  'fill-mask': [
-    'bert-base-uncased',
-    'distilbert-base-uncased'
-  ],
-  'summarization': [
-    'facebook/bart-large-cnn',
-    'sshleifer/distilbart-cnn-12-6'
-  ],
-  'translation': [
-    'Helsinki-NLP/opus-mt-en-fr',
-    'Helsinki-NLP/opus-mt-en-de'
-  ]
-};
-
-// Memory monitoring
-function logMemoryUsage() {
-  const used = process.memoryUsage();
-  const usage = {
-    rss: Math.round(used.rss / 1024 / 1024 * 100) / 100,
-    heapTotal: Math.round(used.heapTotal / 1024 / 1024 * 100) / 100,
-    heapUsed: Math.round(used.heapUsed / 1024 / 1024 * 100) / 100,
-    external: Math.round(used.external / 1024 / 1024 * 100) / 100
-  };
-  
-  console.log('💾 Memory Usage (MB):', usage);
-  
-  // Warning if memory usage is high
-  if (usage.heapUsed > 400) {
-    console.warn('⚠️  High memory usage detected');
-  }
-  
-  return usage;
-}
-
-// AI API Functions with better error handling
+// AI API Functions
 async function callGeminiFlash(prompt) {
   try {
-    console.log('🔥 Calling Gemini Flash...');
     const response = await axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         contents: [{ parts: [{ text: prompt }] }]
       },
       {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 30000
+        headers: { 'Content-Type': 'application/json' }
       }
     );
-    console.log('✅ Gemini Flash response received');
     return response.data.candidates[0].content.parts[0].text;
   } catch (error) {
-    console.error('❌ Gemini Flash Error:', error.response?.data || error.message);
+    console.error('Gemini Flash Error:', error.response?.data || error.message);
     return `Gemini Flash Error: ${error.response?.data?.error?.message || error.message}`;
   }
 }
 
 async function callGeminiPro(prompt) {
   try {
-    console.log('⚡ Calling Gemini Pro...');
     const response = await axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         contents: [{ parts: [{ text: prompt }] }]
       },
       {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 45000
+        headers: { 'Content-Type': 'application/json' }
       }
     );
-    console.log('✅ Gemini Pro response received');
     return response.data.candidates[0].content.parts[0].text;
   } catch (error) {
-    console.error('❌ Gemini Pro Error:', error.response?.data || error.message);
+    console.error('Gemini Pro Error:', error.response?.data || error.message);
     return `Gemini Pro Error: ${error.response?.data?.error?.message || error.message}`;
   }
 }
 
-// Enhanced Hugging Face API call with retry logic
-async function callHuggingFaceModel(prompt, modelId, task = 'text-generation', retries = 3) {
-  const maxRetries = retries;
-  let lastError;
-
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      console.log(`🤗 [${i + 1}/${maxRetries}] Calling model: ${modelId}`);
-
-      // Format request based on task type
-      const requestData = formatHuggingFaceRequest(prompt, modelId, task);
-      
-      const response = await axios.post(
-        `https://api-inference.huggingface.co/models/${modelId}`,
-        requestData,
-        {
-          headers: {
-            'Authorization': `Bearer ${process.env.HUGGING_FACE_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 60000
-        }
-      );
-
-      // Check if model is still loading
-      if (response.data.error && response.data.error.includes('loading')) {
-        console.log(`🤗 Model ${modelId} loading, waiting 15s...`);
-        await new Promise(resolve => setTimeout(resolve, 15000));
-        continue;
-      }
-
-      // Check for rate limit
-      if (response.data.error && response.data.error.includes('rate')) {
-        console.log(`🤗 Rate limited, waiting 10s...`);
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        continue;
-      }
-
-      console.log(`✅ Model ${modelId} responded successfully`);
-      return {
-        success: true,
-        model: modelId,
-        response: parseHuggingFaceResponse(response.data, task),
-        raw_response: response.data
-      };
-
-    } catch (error) {
-      lastError = error;
-      console.error(`❌ Attempt ${i + 1} failed for ${modelId}:`, error.response?.data || error.message);
-      
-      if (error.response?.status === 503) {
-        console.log(`🤗 Service unavailable for ${modelId}, waiting 8s...`);
-        await new Promise(resolve => setTimeout(resolve, 8000));
-        continue;
-      }
-      
-      if (error.response?.status === 429) {
-        console.log(`🤗 Rate limited for ${modelId}, waiting 12s...`);
-        await new Promise(resolve => setTimeout(resolve, 12000));
-        continue;
-      }
-      
-      // For other errors, break immediately
-      break;
-    }
-  }
-
-  console.error(`❌ All attempts failed for ${modelId}`);
-  return {
-    success: false,
-    model: modelId,
-    error: lastError?.response?.data || lastError?.message || 'Unknown error'
-  };
-}
-
-// Format request based on model type
-function formatHuggingFaceRequest(prompt, modelId, task) {
-  const basePayload = { inputs: prompt };
-  
-  switch (task) {
-    case 'text-generation':
-      return {
-        ...basePayload,
-        parameters: {
-          max_length: 150,
-          temperature: 0.7,
-          do_sample: true,
-          return_full_text: false,
-          top_p: 0.9,
-          num_return_sequences: 1
-        }
-      };
-    
-    case 'summarization':
-      return {
-        ...basePayload,
-        parameters: {
-          max_length: 100,
-          min_length: 30,
-          do_sample: false
-        }
-      };
-    
-    case 'question-answering':
-      if (typeof prompt === 'string') {
-        return {
-          inputs: {
-            question: prompt,
-            context: "This is a general knowledge question that needs to be answered based on available information."
+// NEW: Claude API Functions
+async function callClaudeSonnet(prompt) {
+  try {
+    console.log('🤖 Calling Claude Sonnet...');
+    const response = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-3-sonnet-20240229',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
           }
-        };
+        ]
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.CLAUDE_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        timeout: 30000
       }
-      return basePayload;
+    );
     
-    default:
-      return basePayload;
+    console.log('✅ Claude Sonnet response received');
+    return response.data.content[0].text;
+  } catch (error) {
+    console.error('❌ Claude Sonnet Error:', error.response?.data || error.message);
+    return `Claude Sonnet Error: ${error.response?.data?.error?.message || error.message}`;
   }
 }
 
-// Parse response based on task type
-function parseHuggingFaceResponse(data, task) {
-  if (Array.isArray(data)) {
-    switch (task) {
-      case 'text-generation':
-        return data[0]?.generated_text || data[0]?.text || JSON.stringify(data[0]);
-      
-      case 'text-classification':
-        return data[0]?.label || JSON.stringify(data[0]);
-      
-      case 'question-answering':
-        return data[0]?.answer || JSON.stringify(data[0]);
-      
-      case 'summarization':
-        return data[0]?.summary_text || JSON.stringify(data[0]);
-      
-      case 'fill-mask':
-        return data.map(item => `${item.token_str} (${(item.score * 100).toFixed(1)}%)`).join(', ');
-      
-      default:
-        return JSON.stringify(data[0]);
-    }
+async function callClaudeHaiku(prompt) {
+  try {
+    console.log('⚡ Calling Claude Haiku...');
+    const response = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-3-haiku-20240307',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ]
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.CLAUDE_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        timeout: 30000
+      }
+    );
+    
+    console.log('✅ Claude Haiku response received');
+    return response.data.content[0].text;
+  } catch (error) {
+    console.error('❌ Claude Haiku Error:', error.response?.data || error.message);
+    return `Claude Haiku Error: ${error.response?.data?.error?.message || error.message}`;
   }
-  
-  return JSON.stringify(data);
 }
 
 async function generateImage(prompt, style = 'photographic') {
   try {
-    console.log('🎨 Generating image...');
     const response = await axios.post(
       'https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image',
       {
@@ -311,18 +161,16 @@ async function generateImage(prompt, style = 'photographic') {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`,
           'Accept': 'application/json'
-        },
-        timeout: 60000
+        }
       }
     );
     
-    console.log('✅ Image generated successfully');
     return {
       image: response.data.artifacts[0].base64,
       seed: response.data.artifacts[0].seed
     };
   } catch (error) {
-    console.error('❌ Stability Error:', error.response?.data || error.message);
+    console.error('Stability Error:', error.response?.data || error.message);
     return `Stability Error: ${error.response?.data?.message || error.message}`;
   }
 }
@@ -332,57 +180,35 @@ app.get('/', (req, res) => {
   res.json({
     name: 'Curam AI MCP Agent',
     version: '1.0.0',
-    description: 'MCP agent with Gemini models, Stability.AI, Email, and Enhanced Hugging Face',
+    description: 'MCP agent with Gemini models, Claude API, Stability.AI, and Email',
     models: {
-      text: ['Gemini 1.5 Flash', 'Gemini 1.5 Pro'],
-      image: ['Stable Diffusion XL'],
-      huggingface: Object.keys(RELIABLE_FREE_MODELS)
+      text: ['Gemini 1.5 Flash', 'Gemini 1.5 Pro', 'Claude Sonnet', 'Claude Haiku'],
+      image: ['Stable Diffusion XL']
     },
     endpoints: {
       health: '/health',
       compare: 'POST /api/compare',
-      analyze: 'POST /api/analyze',
+      claude_test: 'POST /api/claude-test',
+      multi_compare: 'POST /api/multi-compare',
       generate_image: 'POST /api/generate-image',
       send_email: 'POST /api/send-email',
-      multimodal: 'POST /api/multimodal',
-      hugging_face_test: 'POST /api/hugging-face-test',
-      hugging_face_multi: 'POST /api/hugging-face-multi',
-      hugging_face_models: 'GET /api/hugging-face-models'
+      hugging_face_test: 'POST /api/hugging-face-test'
     },
-    status: 'running',
-    timestamp: new Date().toISOString()
+    status: 'running'
   });
 });
 
-// Enhanced health check
 app.get('/health', (req, res) => {
-  const memUsage = process.memoryUsage();
   res.json({ 
     status: 'healthy', 
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    memory: {
-      rss: Math.round(memUsage.rss / 1024 / 1024),
-      heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
-      heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024)
-    },
     models: {
       gemini: !!process.env.GEMINI_API_KEY,
+      claude: !!process.env.CLAUDE_API_KEY,
       stability: !!process.env.STABILITY_API_KEY,
       mailchannels: !!process.env.MAILCHANNELS_API_KEY,
       huggingface: !!process.env.HUGGING_FACE_API_KEY
-    }
-  });
-});
-
-// Get available Hugging Face models
-app.get('/api/hugging-face-models', (req, res) => {
-  res.json({
-    available_tasks: Object.keys(RELIABLE_FREE_MODELS),
-    models: RELIABLE_FREE_MODELS,
-    usage: {
-      single_model: 'POST /api/hugging-face-test',
-      multiple_models: 'POST /api/hugging-face-multi'
     }
   });
 });
@@ -420,8 +246,109 @@ app.post('/api/compare', async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    console.error('❌ Compare error:', error);
-    res.status(500).json({ error: 'Internal server error', details: error.message });
+    console.error('Compare error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// NEW: Claude API Test Endpoint
+app.post('/api/claude-test', async (req, res) => {
+  try {
+    const { prompt, model = 'sonnet' } = req.body;
+    
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    if (!process.env.CLAUDE_API_KEY) {
+      return res.status(500).json({ error: 'Claude API key not configured' });
+    }
+
+    console.log(`🤖 Testing Claude ${model} with prompt: "${prompt.substring(0, 50)}..."`);
+
+    let response;
+    if (model.toLowerCase() === 'haiku') {
+      response = await callClaudeHaiku(prompt);
+    } else {
+      response = await callClaudeSonnet(prompt);
+    }
+
+    res.json({
+      success: true,
+      model: model.toLowerCase() === 'haiku' ? 'Claude Haiku' : 'Claude Sonnet',
+      response: response,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('🤖 Claude Test Error:', error);
+    res.status(500).json({
+      error: 'Claude API call failed',
+      details: error.message
+    });
+  }
+});
+
+// NEW: Multi-Model Compare (Gemini + Claude)
+app.post('/api/multi-compare', async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    console.log(`🔄 Processing multi-model compare for prompt: "${prompt.substring(0, 50)}..."`);
+
+    // Call all available models
+    const promises = [
+      callGeminiFlash(prompt),
+      callGeminiPro(prompt)
+    ];
+
+    // Add Claude models if API key is available
+    if (process.env.CLAUDE_API_KEY) {
+      promises.push(callClaudeSonnet(prompt));
+      promises.push(callClaudeHaiku(prompt));
+    }
+
+    const responses = await Promise.all(promises);
+    
+    const responseObj = {
+      gemini_flash: {
+        model: 'Gemini 1.5 Flash',
+        response: responses[0],
+        characteristics: 'Fast, cost-effective'
+      },
+      gemini_pro: {
+        model: 'Gemini 1.5 Pro',
+        response: responses[1],
+        characteristics: 'Higher quality, better reasoning'
+      }
+    };
+
+    // Add Claude responses if available
+    if (process.env.CLAUDE_API_KEY) {
+      responseObj.claude_sonnet = {
+        model: 'Claude Sonnet',
+        response: responses[2],
+        characteristics: 'Balanced performance and capability'
+      };
+      responseObj.claude_haiku = {
+        model: 'Claude Haiku',
+        response: responses[3],
+        characteristics: 'Fast, lightweight responses'
+      };
+    }
+    
+    res.json({
+      prompt,
+      responses: responseObj,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Multi-compare error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -450,8 +377,8 @@ app.post('/api/generate-image', async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    console.error('❌ Image generation error:', error);
-    res.status(500).json({ error: 'Internal server error', details: error.message });
+    console.error('Image generation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -498,6 +425,8 @@ app.post('/api/send-email', async (req, res) => {
       }];
     }
 
+    console.log('📧 API Key present:', !!process.env.MAILCHANNELS_API_KEY);
+
     const response = await axios.post(
       'https://api.mailchannels.net/tx/v1/send',
       emailData,
@@ -506,7 +435,7 @@ app.post('/api/send-email', async (req, res) => {
           'X-API-Key': process.env.MAILCHANNELS_API_KEY,
           'Content-Type': 'application/json'
         },
-        timeout: 15000
+        timeout: 10000
       }
     );
 
@@ -520,7 +449,7 @@ app.post('/api/send-email', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Email error:', error.response?.data || error.message);
+    console.error('📧 Email error:', error.response?.data || error.message);
     
     let errorMessage = 'Email sending failed';
     if (error.response?.status === 401) {
@@ -539,10 +468,11 @@ app.post('/api/send-email', async (req, res) => {
   }
 });
 
-// Enhanced Hugging Face single model test
+// Hugging Face API endpoint
 app.post('/api/hugging-face-test', async (req, res) => {
   try {
-    const { prompt, model, task = 'text-generation' } = req.body;
+    const { prompt, model } = req.body;
+    const modelId = model || 'gpt2';
 
     if (!prompt) {
       return res.status(400).json({ error: 'Prompt is required' });
@@ -552,215 +482,69 @@ app.post('/api/hugging-face-test', async (req, res) => {
       return res.status(500).json({ error: 'Hugging Face API key not configured' });
     }
 
-    // Use provided model or default to reliable one
-    let modelId = model;
-    if (!modelId && RELIABLE_FREE_MODELS[task]) {
-      modelId = RELIABLE_FREE_MODELS[task][0];
-    } else if (!modelId) {
-      modelId = 'gpt2';
-    }
+    console.log(`🤗 Testing Hugging Face with prompt: "${prompt.substring(0, 50)}..." using model: ${modelId}`);
 
-    console.log(`🤗 Testing single model: ${modelId} with task: ${task}`);
-
-    const result = await callHuggingFaceModel(prompt, modelId, task);
-    
-    if (result.success) {
-      res.json({
-        ...result,
-        timestamp: new Date().toISOString()
-      });
-    } else {
-      res.status(500).json({
-        error: 'Hugging Face API call failed',
-        details: result.error,
-        model: result.model
-      });
-    }
-
-  } catch (error) {
-    console.error('❌ Hugging Face Test Error:', error);
-    res.status(500).json({
-      error: 'Internal server error',
-      details: error.message
-    });
-  }
-});
-
-// NEW: Multiple Hugging Face models endpoint
-app.post('/api/hugging-face-multi', async (req, res) => {
-  try {
-    const { prompt, models, task = 'text-generation', max_concurrent = 3 } = req.body;
-
-    if (!prompt) {
-      return res.status(400).json({ error: 'Prompt is required' });
-    }
-
-    if (!process.env.HUGGING_FACE_API_KEY) {
-      return res.status(500).json({ error: 'Hugging Face API key not configured' });
-    }
-
-    // Use provided models or default to reliable ones for the task
-    let modelList = models;
-    if (!modelList && RELIABLE_FREE_MODELS[task]) {
-      modelList = RELIABLE_FREE_MODELS[task];
-    } else if (!modelList) {
-      modelList = ['gpt2', 'microsoft/DialoGPT-medium'];
-    }
-
-    console.log(`🤗 Testing multiple models: ${modelList.join(', ')} with task: ${task}`);
-
-    // Process models in batches to avoid overwhelming the API
-    const results = [];
-    const batchSize = Math.min(max_concurrent, 3);
-    
-    for (let i = 0; i < modelList.length; i += batchSize) {
-      const batch = modelList.slice(i, i + batchSize);
-      console.log(`🤗 Processing batch ${Math.floor(i/batchSize) + 1}: ${batch.join(', ')}`);
-      
-      const batchPromises = batch.map(modelId => 
-        callHuggingFaceModel(prompt, modelId, task)
-      );
-      
-      const batchResults = await Promise.all(batchPromises);
-      results.push(...batchResults);
-      
-      // Add delay between batches to respect rate limits
-      if (i + batchSize < modelList.length) {
-        console.log('⏳ Waiting 3s before next batch...');
-        await new Promise(resolve => setTimeout(resolve, 3000));
+    const response = await axios.post(
+      `https://api-inference.huggingface.co/models/${modelId}`,
+      { inputs: prompt },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.HUGGING_FACE_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000
       }
-    }
+    );
 
-    // Separate successful and failed results
-    const successful = results.filter(r => r.success);
-    const failed = results.filter(r => !r.success);
-
-    console.log(`✅ Multi-model completed: ${successful.length} successful, ${failed.length} failed`);
+    console.log('✅ Hugging Face API call successful');
 
     res.json({
-      prompt,
-      task,
-      total_models: modelList.length,
-      successful_count: successful.length,
-      failed_count: failed.length,
-      results: {
-        successful: successful.map(r => ({
-          model: r.model,
-          response: r.response,
-          raw_response: r.raw_response
-        })),
-        failed: failed.map(r => ({
-          model: r.model,
-          error: r.error
-        }))
-      },
+      success: true,
+      model: modelId,
+      response: response.data[0]?.generated_text || response.data[0]?.answer || response.data,
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
-    console.error('❌ Multi-model error:', error);
+    console.error('🤗 Hugging Face Error:', error.response?.data || error.message);
+
+    let errorMessage = 'Hugging Face API call failed';
+    if (error.response?.status === 401) {
+      errorMessage = 'Authentication failed - check Hugging Face API key';
+    } else if (error.response?.status === 503) {
+      errorMessage = 'Model is loading - try again in a few seconds';
+    }
+
     res.status(500).json({
-      error: 'Internal server error',
-      details: error.message
+      error: errorMessage,
+      details: error.response?.data || error.message
     });
   }
 });
 
-// Error handling middleware
-app.use((error, req, res, next) => {
-  console.error('❌ Unhandled error:', error);
-  res.status(500).json({
-    error: 'Internal server error',
-    details: error.message,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    error: 'Endpoint not found',
-    path: req.path,
-    method: req.method,
-    available_endpoints: [
-      'GET /',
-      'GET /health',
-      'GET /api/hugging-face-models',
-      'POST /api/compare',
-      'POST /api/generate-image',
-      'POST /api/send-email',
-      'POST /api/hugging-face-test',
-      'POST /api/hugging-face-multi'
-    ]
-  });
-});
-
-// Process error handlers
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
-  console.error('Stack:', error.stack);
-  // Don't exit immediately, let Railway handle it
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-  // Don't exit immediately
-});
-
-// Start server with better error handling
-const server = app.listen(PORT, '0.0.0.0', () => {
+// Start server
+app.listen(PORT, () => {
   console.log(`🚀 Curam AI MCP Agent running on port ${PORT}`);
   console.log(`📊 Health check available at /health`);
   console.log(`🌐 API endpoints ready at https://curam-ai-agent-mcp-production.up.railway.app`);
   
   // Environment variable checks
-  const envChecks = {
+  const apiKeys = {
     GEMINI_API_KEY: !!process.env.GEMINI_API_KEY,
+    CLAUDE_API_KEY: !!process.env.CLAUDE_API_KEY,
     STABILITY_API_KEY: !!process.env.STABILITY_API_KEY,
     MAILCHANNELS_API_KEY: !!process.env.MAILCHANNELS_API_KEY,
     HUGGING_FACE_API_KEY: !!process.env.HUGGING_FACE_API_KEY
   };
-  
-  console.log('🔑 Environment Variables Status:', envChecks);
-  
-  Object.entries(envChecks).forEach(([key, value]) => {
-    if (!value) {
-      console.warn(`⚠️  ${key} not found`);
-    } else {
+
+  console.log('🔑 API Keys Status:');
+  Object.entries(apiKeys).forEach(([key, present]) => {
+    if (present) {
       console.log(`✅ ${key} configured`);
+    } else {
+      console.warn(`⚠️  ${key} not found`);
     }
   });
-  
-  // Log initial memory usage
-  logMemoryUsage();
 });
-
-server.on('error', (error) => {
-  console.error('❌ Server error:', error);
-});
-
-// Keep the server alive
-server.keepAliveTimeout = 120000; // 2 minutes
-server.headersTimeout = 120000; // 2 minutes
-
-// Graceful shutdown handlers
-process.on('SIGTERM', () => {
-  console.log('🔄 SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('🔄 SIGINT received, shutting down gracefully');
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
-});
-
-// Log memory usage every 5 minutes
-setInterval(logMemoryUsage, 5 * 60 * 1000);
 
 export default app;
